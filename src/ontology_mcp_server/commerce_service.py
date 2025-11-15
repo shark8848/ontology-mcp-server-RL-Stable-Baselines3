@@ -294,14 +294,13 @@ class CommerceService:
     # 购物车相关
     # ------------------------------------------------------------------
     def add_to_cart(self, user_id: int, product_id: int, quantity: int = 1) -> Dict[str, Any]:
-        item = self.cart.add_to_cart(user_id, product_id, quantity)
-        return item.to_dict()
+        return self.cart.add_to_cart(user_id, product_id, quantity)
 
     def view_cart(self, user_id: int) -> Dict[str, Any]:
         items = self.cart.get_cart(user_id)
         return {
             "user_id": user_id,
-            "items": [item.to_dict() for item in items],
+            "items": items,
         }
 
     def remove_from_cart(self, user_id: int, product_id: int) -> Dict[str, Any]:

@@ -259,32 +259,38 @@ class CartService:
     
     def __init__(self, db: DatabaseService):
         self.db = db
+
+    def _serialize_cart_item(self, session: Session, cart_item_id: int) -> Dict[str, Any]:
+        cart_item = (
+            session.query(CartItem)
+            .options(selectinload(CartItem.product))
+            .filter(CartItem.cart_id == cart_item_id)
+            .first()
+        )
+        if not cart_item:
+            return {}
+        data = cart_item.to_dict()
+        session.expunge(cart_item)
+        return data
     
-    def add_to_cart(self, user_id: int, product_id: int, quantity: int = 1) -> CartItem:
-        """加入购物车"""
+    def add_to_cart(self, user_id: int, product_id: int, quantity: int = 1) -> Dict[str, Any]:
+        """加入购物车，返回序列化结果"""
         with self.db.get_session() as session:
-            # 检查是否已存在
             existing = session.query(CartItem).filter(
                 and_(CartItem.user_id == user_id, CartItem.product_id == product_id)
             ).first()
             
             if existing:
-                # 更新数量
                 existing.quantity += quantity
                 session.commit()
-                session.refresh(existing)
                 LOGGER.info(
                     "更新购物车: user_id=%s, product_id=%s, new_qty=%s",
                     user_id,
                     product_id,
                     existing.quantity,
                 )
-                data = existing.to_dict()
-                session.expunge(existing)
-                existing.quantity = data["quantity"]
-                return existing
+                return self._serialize_cart_item(session, existing.cart_id)
             else:
-                # 创建新项
                 cart_item = CartItem(
                     user_id=user_id,
                     product_id=product_id,
@@ -292,14 +298,27 @@ class CartService:
                 )
                 session.add(cart_item)
                 session.commit()
-                session.flush(); session.expunge(cart_item)
-                LOGGER.info(f"加入购物车: user_id={user_id}, product_id={product_id}, qty={quantity}")
-                return cart_item
+                LOGGER.info(
+                    "加入购物车: user_id=%s, product_id=%s, qty=%s",
+                    user_id,
+                    product_id,
+                    quantity,
+                )
+                return self._serialize_cart_item(session, cart_item.cart_id)
     
-    def get_cart(self, user_id: int) -> List[CartItem]:
-        """获取购物车"""
+    def get_cart(self, user_id: int) -> List[Dict[str, Any]]:
+        """获取购物车，已包含商品详情"""
         with self.db.get_session() as session:
-            return session.query(CartItem).filter(CartItem.user_id == user_id).all()
+            items = (
+                session.query(CartItem)
+                .options(selectinload(CartItem.product))
+                .filter(CartItem.user_id == user_id)
+                .all()
+            )
+            result = [item.to_dict() for item in items]
+            for item in items:
+                session.expunge(item)
+            return result
     
     def remove_from_cart(self, user_id: int, product_id: int) -> bool:
         """从购物车移除"""

@@ -18,6 +18,7 @@ Run this script from repository root; it will talk to the MCP server at MCP_BASE
 import os
 import uuid
 import json
+import html
 from pathlib import Path
 
 import gradio as gr
@@ -114,6 +115,31 @@ PLAN_HISTORY = []
 TOOL_CALL_HISTORY = []
 
 
+def _render_content_as_html(content: str) -> str:
+    stripped = content.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 2:
+            first = lines[0]
+            lang = first[3:].strip()
+            body = "\n".join(lines[1:-1])
+            escaped = html.escape(body)
+            lang_attr = f" class=\"language-{lang}\"" if lang else ""
+            return f"<pre><code{lang_attr}>{escaped}</code></pre>"
+    return f"<pre><code>{html.escape(content)}</code></pre>"
+
+
+def _collapsible_block(title: str, content: str, *, open_by_default: bool = False) -> str:
+    state = " open" if open_by_default else ""
+    rendered = _render_content_as_html(content)
+    return (
+        f"<details class=\"log-details\"{state}>"
+        f"<summary>{title}</summary>"
+        f"{rendered}"  # html content already escaped
+        f"</details>"
+    )
+
+
 def _format_observation_for_ui(observation, *, max_chars: int = LOG_MAX_CHARS):
     """格式化工具/日志结果，尽量保留完整 JSON。"""
 
@@ -170,7 +196,7 @@ def format_tool_log(log_entries) -> str:
         formatted_obs, is_block = _format_observation_for_ui(observation)
         if is_block:
             lines.append("  - 观察:")
-            lines.append(formatted_obs)
+            lines.append(_collapsible_block("展开查看观察详情", formatted_obs))
         else:
             lines.append(f"  - 观察: {formatted_obs}")
         lines.append("")
@@ -238,7 +264,7 @@ def format_tool_log_history() -> str:
                 formatted_obs, is_block = _format_observation_for_ui(observation)
                 if is_block:
                     lines.append("  - 观察:")
-                    lines.append(formatted_obs)
+                    lines.append(_collapsible_block("展开查看观察详情", formatted_obs))
                 else:
                     lines.append(f"  - 观察: {formatted_obs}")
                 lines.append("")
@@ -457,16 +483,11 @@ def format_execution_log(execution_log) -> str:
             lines.append(f"- 执行类: `{invoked_module}.{invoked_class}`")
             lines.append(f"- 执行方法: `{invoked_method}()`")
             lines.append(f"\n**返回结果**:")
-            
-            # 尝试解析 JSON
-            try:
-                if isinstance(content, str):
-                    parsed = json.loads(content)
-                    lines.append(f"```json\n{json.dumps(parsed, ensure_ascii=False, indent=2)}\n```\n")
-                else:
-                    lines.append(f"```json\n{json.dumps(content, ensure_ascii=False, indent=2)}\n```\n")
-            except (json.JSONDecodeError, TypeError):
-                lines.append(f"```text\n{content}\n```\n")
+            formatted_result, is_block = _format_observation_for_ui(content)
+            if is_block:
+                lines.append(_collapsible_block("展开查看结果", formatted_result))
+            else:
+                lines.append(f"```text\n{formatted_result}\n```\n")
                 
         elif step_type == "final_answer":
             iteration = metadata.get("iteration", 0)
@@ -506,7 +527,8 @@ def format_execution_log(execution_log) -> str:
                 policy = content.get("policy")
                 if policy:
                     lines.append("\n**推理结果**:")
-                    lines.append(f"```json\n{json.dumps(policy, ensure_ascii=False, indent=2)}\n```")
+                    policy_text = f"```json\n{json.dumps(policy, ensure_ascii=False, indent=2)}\n```"
+                    lines.append(_collapsible_block("展开查看推理结果", policy_text))
             else:
                 lines.append(f"```text\n{content}\n```")
             if metadata:
@@ -701,7 +723,7 @@ def format_execution_log_history() -> str:
                 formatted_result, is_block = _format_observation_for_ui(content)
                 if is_block:
                     lines.append("  - 结果:")
-                    lines.append(formatted_result)
+                    lines.append(_collapsible_block("展开查看结果", formatted_result))
                 else:
                     lines.append(f"  - 结果: {formatted_result}")
             
@@ -1115,6 +1137,20 @@ with gr.Blocks(
         padding: 4px 8px !important;
         min-width: 80px !important;
     }
+    details.log-details {
+        margin: 6px 0 10px 12px;
+        padding: 6px 10px;
+        border-left: 2px solid #d0d7de;
+        background: rgba(0, 0, 0, 0.02);
+    }
+    details.log-details summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: #1f6feb;
+    }
+    details.log-details[open] {
+        background: rgba(0, 0, 0, 0.04);
+    }
     """
 ) as demo:
     gr.Markdown(f"# Ontology RL Commerce Agent \n**ChromaDB 持久化记忆** (会话: `{SESSION_ID[:12]}...`)")
@@ -1148,31 +1184,36 @@ with gr.Blocks(
         with gr.Column(scale=2, elem_classes="right-panel"):
             with gr.Tabs(elem_classes="right-panel-scroll"):
                 with gr.TabItem("📋 Plan / Tasks"):
-                    plan_md = gr.Markdown("## 📋 Plan / Tasks\n\n> *暂无计划记录*", elem_id="plan_panel", elem_classes="tab-content")
+                    with gr.Accordion("Plan 详情", open=True):
+                        plan_md = gr.Markdown("## 📋 Plan / Tasks\n\n> *暂无计划记录*", elem_id="plan_panel", elem_classes="tab-content")
                 
                 with gr.TabItem("🔧 Tool Calls"):
-                    tool_md = gr.Markdown("## 🔧 Tool Calls\n\n> *暂无工具调用记录*", elem_id="tool_panel", elem_classes="tab-content")
+                    with gr.Accordion("展开/折叠工具调用", open=False):
+                        tool_md = gr.Markdown("## 🔧 Tool Calls\n\n> *暂无工具调用记录*", elem_id="tool_panel", elem_classes="tab-content")
                 
                 with gr.TabItem("💾 Memory"):
-                    memory_md = gr.Markdown(
-                        value=format_memory_context(), 
-                        elem_id="memory_panel",
-                        elem_classes="tab-content"
-                    )
+                    with gr.Accordion("展开/折叠记忆上下文", open=False):
+                        memory_md = gr.Markdown(
+                            value=format_memory_context(), 
+                            elem_id="memory_panel",
+                            elem_classes="tab-content"
+                        )
                 
                 with gr.TabItem("�️ 电商分析"):
-                    ecommerce_md = gr.Markdown(
-                        "## 🛍️ 电商智能分析\n\n> *开始对话后显示分析数据*",
-                        elem_id="ecommerce_panel",
-                        elem_classes="tab-content"
-                    )
+                    with gr.Accordion("展开/折叠电商分析", open=False):
+                        ecommerce_md = gr.Markdown(
+                            "## 🛍️ 电商智能分析\n\n> *开始对话后显示分析数据*",
+                            elem_id="ecommerce_panel",
+                            elem_classes="tab-content"
+                        )
                 
-                with gr.TabItem("�📊 Execution Log"):
-                    execution_log_md = gr.Markdown(
-                        "## 📋 执行日志历史\n\n> *暂无执行记录*", 
-                        elem_id="execution_log_panel",
-                        elem_classes="tab-content"
-                    )
+                with gr.TabItem("📊 Execution Log"):
+                    with gr.Accordion("展开/折叠执行日志", open=False):
+                        execution_log_md = gr.Markdown(
+                            "## 📋 执行日志历史\n\n> *暂无执行记录*", 
+                            elem_id="execution_log_panel",
+                            elem_classes="tab-content"
+                        )
 
     def submit_and_update(message, history):
         """提交消息并更新所有面板 - 先显示用户消息，再获取回复"""

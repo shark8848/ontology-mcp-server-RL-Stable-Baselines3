@@ -30,6 +30,8 @@ ontology-mcp-server/
 │   ├── product_synonyms.json # 商品同义词词库
 │   ├── capabilities.jsonld   # 21个工具能力定义
 │   ├── ecommerce.db          # SQLite 电商数据库
+│   ├── training_scenarios/   # RL 语料（sample_dialogues.json，220条场景）
+│   ├── rl_training/          # RL 训练输出（模型/TensorBoard/检查点）
 │   └── chroma_memory/        # ChromaDB 对话记忆存储
 │
 ├── src/
@@ -66,7 +68,8 @@ ontology-mcp-server/
 │   ├── seed_data.py           # 填充测试数据
 │   ├── add_bulk_products.py   # 生成并注入 1000 款商品
 │   ├── add_bulk_users.py      # 生成并注入 200 名用户
-│   └── update_demo_user_names.py # 随机刷新示例用户(1-5)姓名
+│   ├── update_demo_user_names.py # 随机刷新示例用户(1-5)姓名
+│   └── generate_dialogue_corpus.py # 生成 ≥200 条 RL 语料
 │
 ├── docs/                      # 文档
 │   ├── PHASE3_COMPLETION_REPORT.md
@@ -76,6 +79,8 @@ ontology-mcp-server/
 │
 ├── tests/                     # 测试
 ├── pyproject.toml            # 项目配置
+├── train_rl_agent.py         # PPO 训练入口（0→1 训练流程）
+├── test_rl_modules.py        # RL 模块快速自检
 └── README.md
 ```
 
@@ -258,6 +263,12 @@ AI: [调用 commerce.check_stock] 有货，库存 50 台...
 AI: [调用 commerce.add_to_cart] 已添加... (状态: browsing → cart)
 ```
 
+### 7. （可选）启用强化学习闭环
+- 使用 `scripts/generate_dialogue_corpus.py` 生成最新对话语料（220 条，65% 真实数据）
+- 执行 `python test_rl_modules.py` 确认环境
+- 运行 `python train_rl_agent.py --timesteps ...` 启动 PPO 训练
+- 训练及部署方法详见下文“🧠 强化学习自进化 (Phase 6)”章节
+
 ## 🔧 MCP Server API
 
 MCP 服务器提供 HTTP 接口供 Agent 或其他客户端调用。
@@ -391,25 +402,41 @@ curl -X POST http://localhost:8000/invoke \
 
 **示例对话脚本 + 用户模拟**
 
-- `data/training_scenarios/sample_dialogues.json`：9 组交易驱动语料，55% 聚焦成交闭环，其余 45% 覆盖咨询/问题/客服/退货四类诉求，并引用最新的 1000 款商品与 200 名用户信息。PPO 训练会在 episode 内沿脚本逐条注入用户话术，不再重复“你好”，而是模拟真实购物对话（可自定义脚本路径或内容）。
+- `data/training_scenarios/sample_dialogues.json`：220 组对话（65% 真实用户/手机号/订单号 + 35% 合成 persona），按 `transaction_success / consultation / issue / customer_service / return` 5 类场景分布。训练时脚本逐步注入真实购物话术，完全复用数据库中的 1000+ 商品与 200 名用户。
 
-### 奖励分解
-- `任务完成 (R_task)`：+10 奖励成功下单；关键信息缺失或响应为空即扣分
-- `效率 (R_efficiency)`：鼓励少量工具调用与低延迟；调用过多或超时扣分
-- `满意度 (R_satisfaction)`：结合实时质量分，奖励主动引导、降低澄清率
-- `安全合规 (R_safety)`：默认 +1，检测异常日志、SHACL 失败或危险工具误用时 -10 ~ -0.5
+### 端到端 0→1 闭环：数据 → 训练 → 应用
 
-### 训练前快速校验
+#### 1. 数据阶段：构建真实语料
+1. **填充数据库**（如尚未执行）：
+  ```bash
+  source .venv/bin/activate
+  export ONTOLOGY_DATA_DIR="$(pwd)/data"
+  python scripts/add_bulk_products.py
+  python scripts/add_bulk_users.py
+  python scripts/update_demo_user_names.py --seed 2025
+  ```
+2. **生成 220 条语料（65% 真实数据）**：
+  ```bash
+  python scripts/generate_dialogue_corpus.py
+  ```
+  输出位于 `data/training_scenarios/sample_dialogues.json`，`summary.real_ratio=0.65`、`summary.categories` 会自动给出配额。如需自定义数量/比例，可调整脚本顶部常量再运行。
+3. **快速校验语料**（可选）：
+  ```bash
+  python - <<'PY'
+  import json
+  from collections import Counter
+  data=json.load(open('data/training_scenarios/sample_dialogues.json'))
+  print('total', len(data['scenarios']))
+  print('real_ratio', data['summary']['real_ratio'])
+  print('categories', Counter(s['category'] for s in data['scenarios']))
+  PY
+  ```
+
+#### 2. 训练阶段：Stable Baselines3 PPO
 ```bash
 source .venv/bin/activate
 export ONTOLOGY_DATA_DIR="$(pwd)/data"
-python test_rl_modules.py
-```
-
-### 启动 PPO 训练
-```bash
-source .venv/bin/activate
-export ONTOLOGY_DATA_DIR="$(pwd)/data"
+python test_rl_modules.py                # 训练前自检
 python train_rl_agent.py \
   --timesteps 100000 \
   --eval-freq 2000 \
@@ -417,12 +444,65 @@ python train_rl_agent.py \
   --output-dir data/rl_training \
   --max-steps-per-episode 12
 ```
+训练日志实时写入 `data/rl_training/logs/tensorboard/`，可通过 `tensorboard --logdir data/rl_training/logs/tensorboard` 观察奖励、loss、评估曲线。
 
-**产物位置**
-- 最佳模型：`data/rl_training/best_model/`
+#### 3. 评估与模型产物
+- 最佳模型：`data/rl_training/best_model/best_model.zip`
 - 最终模型：`data/rl_training/models/ppo_ecommerce_final.zip`
-- TensorBoard 日志：`data/rl_training/logs/tensorboard/`
+- 检查点：`data/rl_training/checkpoints/ppo_ecommerce_step_*.zip`
 - Episode 统计：`data/rl_training/logs/training_log.json`
+
+运行离线评估：
+```bash
+python - <<'PY'
+from agent.react_agent import LangChainAgent
+from agent.rl_agent.ppo_trainer import PPOTrainer
+
+agent = LangChainAgent()
+trainer = PPOTrainer(agent, output_dir="data/rl_training")
+trainer.create_env()
+trainer.load_model("data/rl_training/models/ppo_ecommerce_final.zip")
+print(trainer.evaluate(n_eval_episodes=5))
+PY
+```
+
+#### 4. 应用阶段：接入 ReAct Agent
+```bash
+python - <<'PY'
+from agent.react_agent import LangChainAgent
+from agent.rl_agent.ppo_trainer import PPOTrainer
+from agent.rl_agent.gym_env import EcommerceGymEnv
+
+agent = LangChainAgent(max_iterations=6)
+trainer = PPOTrainer(agent, output_dir="data/rl_training")
+trainer.create_env(max_steps_per_episode=10)
+trainer.load_model("data/rl_training/best_model/best_model.zip")
+
+query = "我想买 10 台华为旗舰机，预算 7000 左右"
+action_idx, action_name, _ = trainer.predict(query)
+print("RL 建议动作:", action_idx, action_name)
+
+if action_name == "direct_reply":
+   print(agent.run(query)["final_answer"])
+else:
+   # 可将动作写入系统 prompt 或直接执行对应工具
+   result = agent.run(query)
+   print(result["final_answer"]) 
+PY
+```
+常见集成方式：
+1. **策略提示**：把 `action_name` 作为系统提示，提示 LLM 优先执行该类操作。
+2. **自动调度**：若动作对应 MCP 工具，则直接调用工具并把结果反馈给 LLM，只在需要自然语言回复时调用 LLM。
+3. **在线回放**：记录 `action_idx` 与最终结果，定期将真实日志重新生成语料后继续训练，实现闭环迭代。
+
+#### 5. 回放与再训练
+只需替换 `sample_dialogues.json` 或追加新的语料文件，然后重复“训练阶段”命令即可。`train_rl_agent.py` 在检测到现有模型后，会自动继续训练并写入新的 checkpoints（可更换 `--output-dir` 保存多套策略）。
+
+### 奖励分解
+- `任务完成 (R_task)`：+10 奖励成功下单；关键信息缺失或响应为空即扣分
+- `效率 (R_efficiency)`：鼓励少量工具调用与低延迟；调用过多或超时扣分
+- `满意度 (R_satisfaction)`：结合实时质量分，奖励主动引导、降低澄清率
+- `安全合规 (R_safety)`：默认 +1，检测异常日志、SHACL 失败或危险工具误用时 -10 ~ -0.5
 
 ### 训练循环示意 (Mermaid)
 
@@ -670,6 +750,9 @@ python test_phase4_advanced.py
 
 # Gradio UI 测试
 python test_gradio_ecommerce.py
+
+# RL 模块与环境测试
+python test_rl_modules.py
 ```
 
 ### 单元测试
@@ -681,6 +764,9 @@ pytest tests/
 # 运行特定测试
 pytest tests/test_services.py
 pytest tests/test_commerce_service.py
+
+# 启动 RL 训练（示例）
+python train_rl_agent.py --timesteps 20000 --eval-freq 2000 --checkpoint-freq 5000
 ```
 
 ## ⚙️ 配置说明

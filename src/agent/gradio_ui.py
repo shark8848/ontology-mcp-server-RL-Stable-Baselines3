@@ -942,7 +942,7 @@ with gr.Blocks(
     }
     """
 ) as demo:
-    gr.Markdown(f"# Ontology Reasoner MCP Server (Deepseek-Compatible)\n**ChromaDB 持久化记忆** (会话: `{SESSION_ID[:12]}...`)")
+    gr.Markdown(f"# Ontology RL Commerce Agent \n**ChromaDB 持久化记忆** (会话: `{SESSION_ID[:12]}...`)")
     
     with gr.Row(equal_height=False, elem_classes="main-layout-row"):
         # 左侧: 聊天区域
@@ -971,7 +971,7 @@ with gr.Blocks(
             
         # 右侧: Tab 页切换 (包含所有辅助信息)
         with gr.Column(scale=2, elem_classes="right-panel"):
-            with gr.Tabs():
+            with gr.Tabs(elem_classes="right-panel-scroll"):
                 with gr.TabItem("📋 Plan / Tasks"):
                     plan_md = gr.Markdown("## 📋 Plan / Tasks\n\n> *暂无计划记录*", elem_id="plan_panel", elem_classes="tab-content")
                 

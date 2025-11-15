@@ -48,6 +48,12 @@ rule:ReturnRule rdf:type owl:Class ;
     rdfs:label "退换货规则"@zh ;
     rdfs:comment "退换货政策规则"@zh .
 
+rule:CancellationRule rdf:type owl:Class ;
+    rdfs:subClassOf rule:BusinessRule ;
+    rdfs:label "Cancellation Rule"@en ;
+    rdfs:label "取消规则"@zh ;
+    rdfs:comment "订单取消策略规则"@zh .
+
 # ============================================
 # 规则属性
 # ============================================
@@ -108,6 +114,24 @@ rule:applicableTo rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string ;
     rdfs:label "applicable to"@en ;
     rdfs:label "适用范围"@zh .
+
+rule:cancelWindowHours rdf:type owl:DatatypeProperty ;
+    rdfs:domain rule:CancellationRule ;
+    rdfs:range xsd:integer ;
+    rdfs:label "cancel window hours"@en ;
+    rdfs:label "可取消时间窗口(小时)"@zh .
+
+rule:allowedStatuses rdf:type owl:DatatypeProperty ;
+    rdfs:domain rule:CancellationRule ;
+    rdfs:range xsd:string ;
+    rdfs:label "allowed statuses"@en ;
+    rdfs:label "允许取消的订单状态"@zh .
+
+rule:requiresShipmentCheck rdf:type owl:DatatypeProperty ;
+    rdfs:domain rule:CancellationRule ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "requires shipment check"@en ;
+    rdfs:label "需要检查物流状态"@zh .
 
 # ============================================
 # 具体业务规则实例
@@ -293,6 +317,39 @@ rule:ServiceNoReturnRule rdf:type rule:ReturnRule ;
     rule:applicableTo "服务类商品" ;
     rule:priority 30 ;
     rdfs:comment "AppleCare+等服务类商品不可退货"@zh .
+
+# ---------- 取消规则 ----------
+
+rule:Pending24hCancellationRule rdf:type rule:CancellationRule ;
+    rdfs:label "Pending 24h Cancellation Rule"@en ;
+    rdfs:label "待支付24小时可取消"@zh ;
+    rule:condition "orderStatus = 'pending' AND hoursSinceOrder <= 24" ;
+    rule:action "允许直接取消订单" ;
+    rule:cancelWindowHours 24 ;
+    rule:allowedStatuses "pending" ;
+    rule:priority 10 ;
+    rdfs:comment "下单未支付且24小时内可无条件取消"@zh .
+
+rule:Paid12hCancellationRule rdf:type rule:CancellationRule ;
+    rdfs:label "Paid 12h Cancellation Rule"@en ;
+    rdfs:label "已支付12小时内可取消"@zh ;
+    rule:condition "orderStatus = 'paid' AND hoursSinceOrder <= 12 AND hasShipment = false" ;
+    rule:action "需要人工确认后取消" ;
+    rule:cancelWindowHours 12 ;
+    rule:allowedStatuses "paid" ;
+    rule:requiresShipmentCheck "true"^^xsd:boolean ;
+    rule:priority 20 ;
+    rdfs:comment "已支付订单若未发货且在12小时内可申请取消"@zh .
+
+rule:ShippedCancellationBlockRule rdf:type rule:CancellationRule ;
+    rdfs:label "Shipped Cancellation Block Rule"@en ;
+    rdfs:label "发货后不可取消"@zh ;
+    rule:condition "orderStatus IN ('shipped','delivered') OR hasShipment = true" ;
+    rule:action "拒绝取消请求" ;
+    rule:cancelWindowHours 0 ;
+    rule:allowedStatuses "shipped,delivered" ;
+    rule:priority 30 ;
+    rdfs:comment "发货或送达后的订单不可再取消"@zh .
 
 # ============================================
 # 规则组合策略

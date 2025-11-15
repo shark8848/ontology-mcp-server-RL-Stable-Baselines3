@@ -39,6 +39,7 @@ from .models import (
 
 LOGGER = get_logger(__name__)
 class CommerceService:
+    _ORDER_NO_MIN_DIGITS = 15
     """业务协调层，将数据库原子操作与本体推理组合使用。"""
 
     def __init__(self, db_path: str = "data/ecommerce.db") -> None:
@@ -52,6 +53,45 @@ class CommerceService:
         self.shipments: ShipmentService = self._db_layer.shipments
         self.ontology = EcommerceOntologyService()
         LOGGER.info("CommerceService 初始化完成")
+
+    def _resolve_order_entity(self, identifier: Any) -> Order:
+        """根据多种编号格式获取订单对象。"""
+
+        if isinstance(identifier, Order):
+            return identifier
+
+        raw = "" if identifier is None else str(identifier).strip()
+        if not raw:
+            raise ValueError("order_id 不能为空")
+
+        normalized = raw.upper()
+        digits = "".join(ch for ch in normalized if ch.isdigit())
+
+        order: Optional[Order] = None
+        order_id_candidate: Optional[int] = None
+        if digits:
+            try:
+                order_id_candidate = int(digits)
+            except ValueError:
+                order_id_candidate = None
+
+        if order_id_candidate is not None:
+            order = self.orders.get_order_by_id(order_id_candidate)
+            if order:
+                return order
+
+        order_no_candidate: Optional[str] = None
+        if normalized.startswith("ORD"):
+            order_no_candidate = normalized
+        elif digits and len(digits) >= self._ORDER_NO_MIN_DIGITS:
+            order_no_candidate = f"ORD{digits}"
+
+        if order_no_candidate:
+            order = self.orders.get_order_by_no(order_no_candidate)
+            if order:
+                return order
+
+        raise ValueError("订单不存在")
 
     # ------------------------------------------------------------------
     # 通用与辅助方法
@@ -109,6 +149,33 @@ class CommerceService:
             ])
         
         return "\n".join(lines)
+
+    def _build_cancellation_log_entry(
+        self,
+        order: Order,
+        *,
+        hours_since_created: float,
+        has_shipment: bool,
+        policy: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """构建取消订单推理的执行日志条目。"""
+        safe_policy = dict(policy)
+        return {
+            "step_type": "ontology_inference",
+            "content": {
+                "inference_type": "cancellation_policy",
+                "order_id": order.order_id,
+                "order_no": getattr(order, "order_no", None),
+                "order_status": order.order_status,
+                "hours_since_created": round(hours_since_created, 2),
+                "has_shipment": has_shipment,
+                "policy": safe_policy,
+            },
+            "metadata": {
+                "source": "CommerceService.cancel_order",
+                "ontology_method": "infer_cancellation_policy",
+            },
+        }
 
     # ------------------------------------------------------------------
     # 用户相关
@@ -358,28 +425,72 @@ class CommerceService:
             "shipping": shipping_info,
         }
 
-    def get_order_detail(self, order_id: int) -> Dict[str, Any]:
-        order = self.orders.get_order_by_id(order_id)
-        if not order:
-            raise ValueError("订单不存在")
+    def get_order_detail(self, order_id: int | str) -> Dict[str, Any]:
+        order = self._resolve_order_entity(order_id)
         user = self.users.get_user_by_id(order.user_id)
-        shipment = self.shipments.get_shipment_by_order(order_id)
+        shipment = self.shipments.get_shipment_by_order(order.order_id)
         return {
             "order": order.to_dict(),
             "user": user.to_dict() if user else None,
             "shipment": shipment.to_dict() if shipment else None,
         }
 
-    def cancel_order(self, order_id: int) -> Dict[str, Any]:
-        cancelled = self.orders.cancel_order(order_id)
-        return {"cancelled": cancelled}
+    def cancel_order(self, order_id: int | str) -> Dict[str, Any]:
+        order = self._resolve_order_entity(order_id)
+        created_at = order.created_at or datetime.now()
+        hours_since_order = (datetime.now() - created_at).total_seconds() / 3600
+        shipment = self.shipments.get_shipment_by_order(order.order_id)
+
+        policy = self.ontology.infer_cancellation_policy(
+            order_status=order.order_status,
+            hours_since_created=hours_since_order,
+            has_shipment=shipment is not None,
+        )
+
+        if not policy.get("allowed"):
+            LOGGER.info(
+                "取消订单被拒绝: order_id=%s status=%s reason=%s",
+                order.order_id,
+                order.order_status,
+                policy.get("reason"),
+            )
+            log_entry = self._build_cancellation_log_entry(
+                order,
+                hours_since_created=hours_since_order,
+                has_shipment=shipment is not None,
+                policy=policy,
+            )
+            return {
+                "cancelled": False,
+                "allowed": False,
+                "policy": policy,
+                "_execution_log": [log_entry],
+            }
+
+        cancelled = self.orders.cancel_order(order.order_id)
+        policy["allowed"] = bool(cancelled)
+        if not cancelled:
+            policy["reason"] = "系统未能更新订单状态，可能已取消"
+        log_entry = self._build_cancellation_log_entry(
+            order,
+            hours_since_created=hours_since_order,
+            has_shipment=shipment is not None,
+            policy=policy,
+        )
+        return {
+            "cancelled": bool(cancelled),
+            "allowed": bool(cancelled),
+            "policy": policy,
+            "_execution_log": [log_entry],
+        }
 
     def get_user_orders_summary(self, user_id: int) -> Dict[str, Any]:
         return self.get_user_orders(user_id)
 
-    def process_payment(self, order_id: int, payment_method: str, amount: Decimal) -> Dict[str, Any]:
-        payment = self.payments.create_payment(order_id, payment_method, amount)
-        self.orders.update_payment_status(order_id, "paid")
+    def process_payment(self, order_id: int | str, payment_method: str, amount: Decimal) -> Dict[str, Any]:
+        order = self._resolve_order_entity(order_id)
+        payment = self.payments.create_payment(order.order_id, payment_method, amount)
+        self.orders.update_payment_status(order.order_id, "paid")
         return payment.to_dict()
 
     # ------------------------------------------------------------------
@@ -391,8 +502,9 @@ class CommerceService:
             raise ValueError("未找到物流信息")
         return shipment.to_dict()
 
-    def get_shipment_status(self, order_id: int) -> Dict[str, Any]:
-        shipment = self.shipments.get_shipment_by_order(order_id)
+    def get_shipment_status(self, order_id: int | str) -> Dict[str, Any]:
+        order = self._resolve_order_entity(order_id)
+        shipment = self.shipments.get_shipment_by_order(order.order_id)
         if not shipment:
             raise ValueError("未找到对应订单的物流信息")
         return shipment.to_dict()
@@ -406,17 +518,21 @@ class CommerceService:
         subject: str,
         description: str,
         *,
-        order_id: Optional[int] = None,
+        order_id: Optional[int | str] = None,
         category: str = "售后",
         priority: str = "medium",
         initial_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         ticket_no = f"TKT{datetime.now().strftime('%Y%m%d%H%M%S')}{user_id:04d}"
+        resolved_order_id: Optional[int] = None
+        if order_id is not None:
+            resolved_order_id = self._resolve_order_entity(order_id).order_id
+
         with self.database.get_session() as session:
             ticket = SupportTicket(
                 ticket_no=ticket_no,
                 user_id=user_id,
-                order_id=order_id,
+                order_id=resolved_order_id,
                 category=category,
                 priority=priority,
                 status="open",
@@ -439,7 +555,7 @@ class CommerceService:
 
     def process_return(
         self,
-        order_id: int,
+        order_id: int | str,
         user_id: int,
         *,
         return_type: str = "return",
@@ -450,7 +566,7 @@ class CommerceService:
         user = self.users.get_user_by_id(user_id)
         if not user:
             raise ValueError("用户不存在")
-        order = self.orders.get_order_by_id(order_id)
+        order = self._resolve_order_entity(order_id)
         if not order:
             raise ValueError("订单不存在")
         policy = self.ontology.infer_return_policy(
@@ -465,7 +581,7 @@ class CommerceService:
         with self.database.get_session() as session:
             record = Return(
                 return_no=return_no,
-                order_id=order_id,
+            order_id=order.order_id,
                 user_id=user_id,
                 return_type=return_type,
                 reason=reason,

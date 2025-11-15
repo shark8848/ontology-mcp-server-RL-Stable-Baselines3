@@ -4,12 +4,24 @@
 # ========================================
 # LLM 配置
 # ========================================
+LLM_PROVIDER: deepseek   # deepseek | ollama
 OPENAI_API_URL: https://api.deepseek.com/v1
 OPENAI_API_KEY: your-api-key-here
 OPENAI_MODEL: deepseek-chat
 
-# MCP 服务地址
+# 可选：Ollama 本地模型默认值（仅在 LLM_PROVIDER=ollama 时使用，可按需覆盖）
+OLLAMA_API_URL: http://localhost:11434/v1
+OLLAMA_MODEL: qwen3:8b
+OLLAMA_API_KEY: ollama
+# 可选：设置 MCP 地址（MCP 服务地址）
 MCP_BASE_URL: http://localhost:8000
+
+# UI 日志显示配置
+ui:
+  # 工具调用面板最长展示字符数
+  tool_log_max_chars: 8000
+  # 执行日志摘要截断长度
+  execution_log_snippet_chars: 1200
 
 # ========================================
 # 对话记忆配置
@@ -45,7 +57,7 @@ memory:
     similarity_threshold: 0.5       # 相似度阈值 (0-1, 越高越严格)
     
     # 是否启用 LLM 摘要生成 (需要额外 LLM 调用, 适合长对话压缩)
-    enable_llm_summary: false
+    enable_llm_summary: true
     
     # 摘要生成策略
     summary:
@@ -55,7 +67,7 @@ memory:
       #   - "manual": 仅手动调用
       trigger: "threshold"
       # 对话轮数阈值
-      turns_threshold: 5
+      turns_threshold: 10
       # 文本长度阈值(字符数)
       text_length_threshold: 500
       # 摘要最大长度(字符数)
@@ -75,7 +87,7 @@ memory:
     # 是否启用内存缓存 (加速重复访问)
     enable_cache: true
     # 缓存最大条目数
-    cache_size: 100
+    cache_size: 1000000
     # 批量操作大小
     batch_size: 10
 

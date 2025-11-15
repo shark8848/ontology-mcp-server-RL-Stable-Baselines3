@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,7 +28,29 @@ from .logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_API_URL = "https://api.deepseek.com/v1"
+_VERSION_SUFFIX_RE = re.compile(r"/v\d+(?:\.\d+)?$", re.IGNORECASE)
+
+
+def _strip_endpoint_suffix(url: str) -> str:
+    """Remove route fragments like /chat/completions or /responses."""
+
+    for suffix in ("/chat/completions", "/chat/completions/", "/responses", "/responses/"):
+        if url.endswith(suffix):
+            return url[: -len(suffix)].rstrip("/")
+    return url
+
+
+def _ensure_version_segment(url: str) -> str:
+    """Append /v1 if user configured a host root without version."""
+
+    if _VERSION_SUFFIX_RE.search(url):
+        return url
+    return url.rstrip("/") + "/v1"
 DEFAULT_MODEL = "deepseek-chat"
+
+DEFAULT_OLLAMA_API_URL = "http://localhost:11434/v1"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
+DEFAULT_OLLAMA_API_KEY = "ollama"
 
 
 def _load_yaml_config() -> dict:
@@ -192,22 +215,74 @@ def build_chat_model(
 
     cfg = _load_yaml_config()
 
-    resolved_api_url = _first_non_empty(
-        api_url,
-        os.getenv("OPENAI_API_URL"),
-        cfg.get("OPENAI_API_URL"),
-        os.getenv("DEEPSEEK_API_URL"),
-        cfg.get("DEEPSEEK_API_URL"),
-        DEFAULT_API_URL,
-    )
-    resolved_api_url = resolved_api_url or DEFAULT_API_URL
+    provider = (
+        _first_non_empty(
+            os.getenv("LLM_PROVIDER"),
+            cfg.get("LLM_PROVIDER"),
+            os.getenv("OPENAI_PROVIDER"),
+            cfg.get("OPENAI_PROVIDER"),
+            os.getenv("DEEPSEEK_PROVIDER"),
+            cfg.get("DEEPSEEK_PROVIDER"),
+            "deepseek",
+        )
+        or "deepseek"
+    ).strip().lower()
 
-    resolved_api_key = _first_non_empty(
+    # 兼容多种写法，例如 local_ollama / ollama-qwen
+    is_ollama = provider in {"ollama", "local", "ollama-qwen", "ollama_qwen", "ollama_local"}
+
+    def resolve_value(
+        explicit: Optional[str],
+        provider_keys: List[str],
+        shared_keys: List[str],
+        default: Optional[str],
+    ) -> Optional[str]:
+        sources: List[Optional[str]] = [explicit]
+        for key in provider_keys:
+            sources.extend([os.getenv(key), cfg.get(key)])
+        for key in shared_keys:
+            sources.extend([os.getenv(key), cfg.get(key)])
+        sources.append(default)
+        return _first_non_empty(*sources)
+
+    provider_url_keys = ["OLLAMA_API_URL"] if is_ollama else ["DEEPSEEK_API_URL", "OPENAI_API_URL"]
+    provider_key_keys = ["OLLAMA_API_KEY"] if is_ollama else ["DEEPSEEK_API_KEY", "OPENAI_API_KEY"]
+    provider_model_keys = ["OLLAMA_MODEL"] if is_ollama else ["DEEPSEEK_MODEL", "OPENAI_MODEL"]
+
+    shared_keys: List[str] = []
+    shared_key_keys: List[str] = []
+    shared_model_keys: List[str] = []
+
+    resolved_api_url = resolve_value(
+        api_url,
+        provider_url_keys,
+        shared_keys,
+        DEFAULT_OLLAMA_API_URL if is_ollama else DEFAULT_API_URL,
+    )
+    resolved_api_url = resolved_api_url or (
+        DEFAULT_OLLAMA_API_URL if is_ollama else DEFAULT_API_URL
+    )
+    resolved_api_url = resolved_api_url.strip()
+    if not is_ollama and resolved_api_url:
+        sanitized_url = _strip_endpoint_suffix(resolved_api_url.rstrip("/"))
+        if not sanitized_url:
+            sanitized_url = DEFAULT_API_URL
+        if sanitized_url != resolved_api_url:
+            logger.warning(
+                "Detected full endpoint in OPENAI/DEEPSEEK API URL; trimmed to base '%s'",
+                sanitized_url,
+            )
+        resolved_api_url = _ensure_version_segment(sanitized_url)
+    else:
+        resolved_api_url = resolved_api_url.rstrip("/") or (
+            DEFAULT_OLLAMA_API_URL if is_ollama else DEFAULT_API_URL
+        )
+
+    resolved_api_key = resolve_value(
         api_key,
-        os.getenv("OPENAI_API_KEY"),
-        cfg.get("OPENAI_API_KEY"),
-        os.getenv("DEEPSEEK_API_KEY"),
-        cfg.get("DEEPSEEK_API_KEY"),
+        provider_key_keys,
+        shared_key_keys,
+        DEFAULT_OLLAMA_API_KEY if is_ollama else None,
     )
 
     if not resolved_api_key:
@@ -215,15 +290,15 @@ def build_chat_model(
             "未找到 OpenAI/DeepSeek API Key，请设置 OPENAI_API_KEY 或 DEEPSEEK_API_KEY"
         )
 
-    resolved_model = _first_non_empty(
+    resolved_model = resolve_value(
         model,
-        os.getenv("OPENAI_MODEL"),
-        cfg.get("OPENAI_MODEL"),
-        os.getenv("DEEPSEEK_MODEL"),
-        cfg.get("DEEPSEEK_MODEL"),
-        DEFAULT_MODEL,
+        provider_model_keys,
+        shared_model_keys,
+        DEFAULT_OLLAMA_MODEL if is_ollama else DEFAULT_MODEL,
     )
-    resolved_model = resolved_model or DEFAULT_MODEL
+    resolved_model = resolved_model or (
+        DEFAULT_OLLAMA_MODEL if is_ollama else DEFAULT_MODEL
+    )
 
     resolved_temperature = (
         temperature
@@ -252,7 +327,8 @@ def build_chat_model(
     )
 
     logger.info(
-        "Initializing DeepSeek chat model=%s base=%s",
+        "Initializing %s chat model=%s base=%s",
+        "Ollama" if is_ollama else "DeepSeek",
         resolved_model,
         resolved_api_url,
     )

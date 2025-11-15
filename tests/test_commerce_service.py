@@ -9,11 +9,13 @@ Repository: https://github.com/shark8848/ontology-mcp-server
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
 from ontology_mcp_server.commerce_service import CommerceService
+from ontology_mcp_server.models import Order
 
 
 @pytest.fixture()
@@ -69,3 +71,102 @@ def test_search_and_order_flow(commerce_service):
     )
     assert return_result["policy"]["returnable"] is True
     assert return_result["return_created"] is True
+
+
+def test_get_order_detail_accepts_order_number(commerce_service):
+    service, user, product = commerce_service
+
+    order_payload = {
+        "user_id": user.user_id,
+        "items": [
+            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
+        ],
+        "shipping_address": "深圳市福田区深南大道",
+        "contact_phone": "13900007777",
+    }
+
+    create_result = service.create_order(**order_payload)
+    order_data = create_result["order"]
+    order_no = order_data["order_no"]
+
+    detail_by_no = service.get_order_detail(order_no)
+    assert detail_by_no["order"]["order_no"] == order_no
+
+    digits_only = order_no.replace("ORD", "")
+    detail_by_digits = service.get_order_detail(digits_only)
+    assert detail_by_digits["order"]["order_no"] == order_no
+
+
+def test_cancel_order_pending_within_window(commerce_service):
+    service, user, product = commerce_service
+
+    order_payload = {
+        "user_id": user.user_id,
+        "items": [
+            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
+        ],
+        "shipping_address": "杭州市西湖区文三路",
+        "contact_phone": "13600006666",
+    }
+
+    create_result = service.create_order(**order_payload)
+    order_id = create_result["order"]["order_id"]
+
+    cancel_result = service.cancel_order(order_id)
+
+    assert cancel_result["cancelled"] is True
+    assert cancel_result["policy"]["rule"] == "Pending24hCancellationRule"
+
+
+def test_cancel_order_pending_after_window_denied(commerce_service):
+    service, user, product = commerce_service
+
+    order_payload = {
+        "user_id": user.user_id,
+        "items": [
+            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
+        ],
+        "shipping_address": "北京市朝阳区建国路",
+        "contact_phone": "13500005555",
+    }
+
+    create_result = service.create_order(**order_payload)
+    order_id = create_result["order"]["order_id"]
+
+    with service.database.get_session() as session:
+        db_order = session.query(Order).filter(Order.order_id == order_id).first()
+        db_order.created_at = db_order.created_at - timedelta(hours=30)
+        session.commit()
+
+    cancel_result = service.cancel_order(order_id)
+
+    assert cancel_result["cancelled"] is False
+    assert cancel_result["policy"]["allowed"] is False
+    assert "24" in cancel_result["policy"]["reason"]
+
+
+def test_cancel_order_paid_within_window(commerce_service):
+    service, user, product = commerce_service
+
+    order_payload = {
+        "user_id": user.user_id,
+        "items": [
+            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
+        ],
+        "shipping_address": "深圳市南山区科技园",
+        "contact_phone": "13400004444",
+    }
+
+    create_result = service.create_order(**order_payload)
+    order_id = create_result["order"]["order_id"]
+
+    with service.database.get_session() as session:
+        db_order = session.query(Order).filter(Order.order_id == order_id).first()
+        db_order.order_status = "paid"
+        db_order.created_at = datetime.now() - timedelta(hours=2)
+        session.commit()
+
+    cancel_result = service.cancel_order(order_id)
+
+    assert cancel_result["cancelled"] is True
+    assert cancel_result["policy"]["rule"] == "Paid12hCancellationRule"

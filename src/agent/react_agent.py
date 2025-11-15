@@ -10,7 +10,7 @@ from __future__ import annotations
 """基于 OpenAI 函数调用的轻量智能体封装，支持对话记忆。"""
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .llm_deepseek import get_default_chat_model
 from .logger import get_logger
@@ -132,6 +132,11 @@ class LangChainAgent:
         if enable_recommendation:
             self.recommendation_engine = RecommendationEngine()
             logger.info("已启用个性化推荐引擎")
+
+        # 强制本体/SHACL 校验相关状态
+        self._pending_validation: Optional[Dict[str, Any]] = None
+        self._validation_issued_turn: Optional[int] = None
+        self._last_validation_iteration: Optional[int] = None
         
         # 加载记忆配置
         memory_config = get_memory_config()
@@ -192,6 +197,108 @@ class LangChainAgent:
                 )
         
         logger.info("Initialized OpenAI agent with %d tools", len(self.tools))
+
+    # ------------------------------------------------------------------
+    # Mandatory ontology / SHACL orchestration helpers
+    # ------------------------------------------------------------------
+    def _should_require_validation(
+        self,
+        user_input: str,
+        tool_log: List[Dict[str, Any]],
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """根据当前上下文判断是否必须执行 ontology_validate_order。"""
+
+        if self._pending_validation:
+            return True, self._pending_validation
+
+        # 如果最近一次订单创建后已经执行过校验，则无需重复
+        last_create_index: Optional[int] = None
+        for idx, entry in enumerate(tool_log):
+            if entry.get("tool") == "commerce_create_order":
+                last_create_index = idx
+
+        if last_create_index is not None:
+            for entry in tool_log[last_create_index + 1 :]:
+                if entry.get("tool") == "ontology_validate_order":
+                    return False, None
+
+        stage = None
+        if self.state_manager and self.state_manager.state:
+            stage = self.state_manager.state.stage
+
+        lowered = user_input.lower()
+        requires_validation = False
+        payload: Dict[str, Any] = {}
+
+        keywords = ["验证订单", "shacl", "校验", "validate", "数据校验"]
+        if any(keyword in lowered for keyword in keywords):
+            requires_validation = True
+
+        if not requires_validation and stage == ConversationStage.CHECKOUT:
+            requires_validation = True
+
+        if not requires_validation and tool_log:
+            for entry in reversed(tool_log):
+                tool_name = entry.get("tool", "")
+                if tool_name == "commerce_create_order":
+                    requires_validation = True
+                    payload = entry.get("input", {}) or {}
+                    break
+
+        if not requires_validation:
+            return False, None
+
+        if "data" not in payload:
+            payload["data"] = ""
+        if "format" not in payload:
+            payload["format"] = "turtle"
+
+        return True, payload
+
+    def _enqueue_validation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """创建一个伪造的工具调用记录，提示 LLM 必须执行 SHACL 校验。"""
+
+        validation_record = {
+            "tool": "ontology_validate_order",
+            "input": payload,
+            "observation": json.dumps(
+                {
+                    "_tool_info": {
+                        "class": "MandatoryValidation",
+                        "module": __name__,
+                        "method": "auto_enqueue",
+                    },
+                    "result": {
+                        "status": "pending",
+                        "message": "系统要求立即调用 ontology_validate_order 完成 SHACL 校验。",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            "iteration": -1,
+        }
+        self._pending_validation = payload
+        return validation_record
+
+    def _inject_validation_reminder(
+        self,
+        messages: List[Dict[str, Any]],
+        payload: Dict[str, Any],
+        iteration: int,
+    ) -> None:
+        """在对话中注入系统提醒，要求 LLM 调用校验工具。"""
+
+        if self._validation_issued_turn == iteration:
+            return
+
+        reminder = (
+            "【系统强制校验】检测到用户已进入结算/下单阶段。"
+            "请立即调用工具 `ontology_validate_order`，确保订单数据通过 SHACL 校验。"
+            "如需示例参数，可参考: "
+            f"{json.dumps(payload, ensure_ascii=False)}"
+        )
+        messages.append({"role": "system", "content": reminder})
+        self._validation_issued_turn = iteration
 
     def _call_tool(self, name: str, args: Dict[str, Any]) -> str:
         """调用工具并返回结果"""
@@ -354,6 +461,19 @@ class LangChainAgent:
 
         for iteration in range(1, self.max_iterations + 1):
             add_log("iteration_start", f"开始第 {iteration} 轮推理", {"iteration": iteration})
+
+            requires_validation, payload_hint = self._should_require_validation(user_input, tool_log)
+            if requires_validation:
+                self._pending_validation = payload_hint or self._pending_validation or {"data": "", "format": "turtle"}
+                self._inject_validation_reminder(messages, self._pending_validation, iteration)
+                add_log(
+                    "validation_required",
+                    "系统检测到必须执行 ontology_validate_order",
+                    {
+                        "iteration": iteration,
+                        "payload_hint": self._pending_validation,
+                    },
+                )
             
             # 记录 LLM 输入 - 完整消息和工具定义,以及类信息
             llm_class = self.llm.__class__.__name__
@@ -436,6 +556,19 @@ class LangChainAgent:
             last_ai = assistant_message
 
             if not tool_calls:
+                requires_validation, payload_hint = self._should_require_validation(user_input, tool_log)
+                if requires_validation:
+                    self._pending_validation = payload_hint or self._pending_validation or {"data": "", "format": "turtle"}
+                    self._inject_validation_reminder(messages, self._pending_validation, iteration)
+                    add_log(
+                        "validation_guard",
+                        "阻止结束对话，等待 ontology_validate_order",
+                        {
+                            "iteration": iteration,
+                        },
+                    )
+                    continue
+
                 final_answer = assistant_content
                 add_log("final_answer", final_answer, {"iteration": iteration})
                 break
@@ -481,15 +614,56 @@ class LangChainAgent:
                 
                 # 尝试解析工具返回的元信息
                 tool_result_info = {}
+                sanitized_observation = None
                 try:
                     result_data = json.loads(observation)
+                    payload: Any
+                    if isinstance(result_data, dict):
+                        payload = result_data.get("result", result_data)
+                    else:
+                        payload = result_data
+
+                    if isinstance(payload, str):
+                        try:
+                            parsed_payload = json.loads(payload)
+                            payload = parsed_payload
+                            if isinstance(result_data, dict):
+                                result_data["result"] = parsed_payload
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    custom_entries = []
+                    if isinstance(payload, dict) and "_execution_log" in payload:
+                        embedded_logs = payload.pop("_execution_log")
+                        if isinstance(embedded_logs, dict):
+                            embedded_logs = [embedded_logs]
+                        if isinstance(embedded_logs, list):
+                            for entry in embedded_logs:
+                                if not isinstance(entry, dict):
+                                    continue
+                                custom_entries.append(entry)
+
+                    for entry in custom_entries:
+                        step_type = entry.get("step_type", "custom_event")
+                        entry_content = entry.get("content", {})
+                        entry_metadata = entry.get("metadata", {})
+                        add_log(step_type, entry_content, entry_metadata)
+
                     if isinstance(result_data, dict) and "_tool_info" in result_data:
                         tool_result_info = result_data["_tool_info"]
-                        observation_clean = json.dumps(result_data.get("result", result_data), ensure_ascii=False)
+
+                    if isinstance(payload, (dict, list)):
+                        observation_clean = json.dumps(payload, ensure_ascii=False)
                     else:
-                        observation_clean = observation
-                except (json.JSONDecodeError, TypeError):
+                        observation_clean = str(payload)
+
+                    if isinstance(result_data, (dict, list)):
+                        sanitized_observation = json.dumps(result_data, ensure_ascii=False)
+                except (json.JSONDecodeError, TypeError, ValueError):
                     observation_clean = observation
+
+                if sanitized_observation is not None:
+                    observation = sanitized_observation
                 
                 # 记录工具结果 - 完整输出和执行信息
                 add_log("tool_result", observation_clean, {
@@ -512,6 +686,15 @@ class LangChainAgent:
                 plan_lines.append(
                     f"Step {len(tool_log)} → {tool_name}({json.dumps(parsed_args, ensure_ascii=False)})"
                 )
+                if tool_name == "ontology_validate_order":
+                    self._pending_validation = None
+                    self._last_validation_iteration = iteration
+                    self._validation_issued_turn = None
+                    add_log(
+                        "validation_completed",
+                        "已执行 ontology_validate_order",
+                        {"iteration": iteration},
+                    )
 
                 messages.append(
                     {

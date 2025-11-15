@@ -18,15 +18,72 @@ Run this script from repository root; it will talk to the MCP server at MCP_BASE
 import os
 import uuid
 import json
+from pathlib import Path
 
 import gradio as gr
+import yaml
 
 from agent.react_agent import LangChainAgent
 from agent.logger import get_logger
 from agent.memory_config import get_memory_config
 
+LOGGER = get_logger(__name__)
+
 # 加载记忆配置
 MEMORY_CONFIG = get_memory_config()
+
+
+def _load_agent_config() -> dict:
+    config_path = Path(__file__).resolve().parent / "config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+            if isinstance(data, dict):
+                return data
+    except Exception as exc:  # pragma: no cover - config 解析失败时采用默认
+        LOGGER.warning("无法读取 config.yaml: %s", exc)
+    return {}
+
+
+def _coerce_positive_int(value):
+    if value is None:
+        return None
+    try:
+        ivalue = int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+    return ivalue if ivalue > 0 else None
+
+
+def _resolve_int_setting(env_name: str, config_value, default: int) -> int:
+    env_value = os.getenv(env_name)
+    parsed_env = _coerce_positive_int(env_value)
+    if parsed_env is not None:
+        return parsed_env
+    parsed_cfg = _coerce_positive_int(config_value)
+    if parsed_cfg is not None:
+        return parsed_cfg
+    return default
+
+
+_AGENT_CONFIG = _load_agent_config()
+_UI_CONFIG = _AGENT_CONFIG.get("ui", {}) if isinstance(_AGENT_CONFIG, dict) else {}
+
+_DEFAULT_LOG_MAX_CHARS = 4000
+LOG_MAX_CHARS = _resolve_int_setting(
+    "TOOL_LOG_MAX_CHARS",
+    _UI_CONFIG.get("tool_log_max_chars"),
+    _DEFAULT_LOG_MAX_CHARS,
+)
+
+_DEFAULT_STEP_SNIPPET = 500
+LOG_STEP_SNIPPET_CHARS = _resolve_int_setting(
+    "EXEC_LOG_SNIPPET_CHARS",
+    _UI_CONFIG.get("execution_log_snippet_chars"),
+    _DEFAULT_STEP_SNIPPET,
+)
 
 # 生成唯一会话ID
 SESSION_ID = os.getenv("AGENT_SESSION_ID", f"{MEMORY_CONFIG.session.default_session_prefix}_{uuid.uuid4().hex[:8]}")
@@ -44,7 +101,6 @@ AGENT = LangChainAgent(
     enable_intent_tracking=True,  # Phase 4: 意图识别
     enable_recommendation=True,  # Phase 4: 个性化推荐
 )
-LOGGER = get_logger(__name__)
 LOGGER.info("会话ID: %s (后端: %s, 检索模式: %s)", 
            SESSION_ID, MEMORY_CONFIG.backend, MEMORY_CONFIG.strategy.retrieval_mode)
 
@@ -56,6 +112,31 @@ CONVERSATION_COUNTER = 0
 PLAN_HISTORY = []
 # 全局 Tool Call 历史
 TOOL_CALL_HISTORY = []
+
+
+def _format_observation_for_ui(observation, *, max_chars: int = LOG_MAX_CHARS):
+    """格式化工具/日志结果，尽量保留完整 JSON。"""
+
+    def _truncate(text: str) -> str:
+        if len(text) <= max_chars:
+            return text
+        return f"{text[:max_chars]}... (已截断)"
+
+    if isinstance(observation, (dict, list)):
+        pretty = json.dumps(observation, ensure_ascii=False, indent=2)
+        return f"```json\n{_truncate(pretty)}\n```", True
+
+    if isinstance(observation, str):
+        stripped = observation.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+                return _format_observation_for_ui(parsed, max_chars=max_chars)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return _truncate(observation), False
+
+    return _truncate(repr(observation)), False
 
 
 def format_tool_log(log_entries) -> str:
@@ -86,10 +167,12 @@ def format_tool_log(log_entries) -> str:
         
         lines.append(f"  - 输入: `{e.get('input')}`")
         observation = e.get("observation")
-        if isinstance(observation, str):
-            lines.append(f"  - 观察: {observation[:500]}..." if len(observation) > 500 else f"  - 观察: {observation}")
+        formatted_obs, is_block = _format_observation_for_ui(observation)
+        if is_block:
+            lines.append("  - 观察:")
+            lines.append(formatted_obs)
         else:
-            lines.append(f"  - 观察: {observation!r}")
+            lines.append(f"  - 观察: {formatted_obs}")
         lines.append("")
     return "\n".join(lines)
 
@@ -152,10 +235,12 @@ def format_tool_log_history() -> str:
                 
                 lines.append(f"  - 输入: `{e.get('input')}`")
                 observation = e.get("observation")
-                if isinstance(observation, str):
-                    lines.append(f"  - 观察: {observation[:500]}..." if len(observation) > 500 else f"  - 观察: {observation}")
+                formatted_obs, is_block = _format_observation_for_ui(observation)
+                if is_block:
+                    lines.append("  - 观察:")
+                    lines.append(formatted_obs)
                 else:
-                    lines.append(f"  - 观察: {observation!r}")
+                    lines.append(f"  - 观察: {formatted_obs}")
                 lines.append("")
         
         lines.append("---\n")  # 对话间分隔线
@@ -407,6 +492,29 @@ def format_execution_log(execution_log) -> str:
             lines.append(f"**[{i}] ⚠️ 达到最大迭代限制**")
             lines.append(f"- 限制次数: {metadata.get('max_iterations', 0)}\n")
             
+        elif step_type == "ontology_inference":
+            lines.append(f"**[{i}] 🧠 本体推理**")
+            if isinstance(content, dict):
+                inference_type = content.get("inference_type", "unknown")
+                lines.append(f"- 推理类型: `{inference_type}`")
+                lines.append(f"- 订单ID: {content.get('order_id')}")
+                if content.get("order_no"):
+                    lines.append(f"- 订单号: {content.get('order_no')}")
+                lines.append(f"- 订单状态: {content.get('order_status')}")
+                lines.append(f"- 下单后时长: {content.get('hours_since_created')} 小时")
+                lines.append(f"- 是否已有物流: {'是' if content.get('has_shipment') else '否'}")
+                policy = content.get("policy")
+                if policy:
+                    lines.append("\n**推理结果**:")
+                    lines.append(f"```json\n{json.dumps(policy, ensure_ascii=False, indent=2)}\n```")
+            else:
+                lines.append(f"```text\n{content}\n```")
+            if metadata:
+                lines.append(f"- 来源: {metadata.get('source', 'unknown')}")
+                if metadata.get("ontology_method"):
+                    lines.append(f"- 方法: {metadata['ontology_method']}")
+            lines.append("")
+
         elif step_type == "llm_error":
             llm_class = metadata.get("llm_class", "Unknown")
             llm_module = metadata.get("llm_module", "Unknown")
@@ -469,7 +577,8 @@ def format_execution_log_history() -> str:
                 "memory_saved": "✅",
                 "execution_complete": "🏁",
                 "llm_error": "❌",
-                "max_iterations": "⚠️"
+                "max_iterations": "⚠️",
+                "ontology_inference": "🧠",
             }
             icon = icon_map.get(step_type, "📄")
             
@@ -512,7 +621,10 @@ def format_execution_log_history() -> str:
                 if isinstance(content, dict):
                     text = content.get('content', '')
                     tool_calls = content.get('tool_calls', [])
-                    lines.append(f"  - 回复: {text[:500]}..." if len(text) > 500 else f"  - 回复: {text}")
+                    snippet = LOG_STEP_SNIPPET_CHARS
+                    lines.append(
+                        f"  - 回复: {text[:snippet]}..." if len(text) > snippet else f"  - 回复: {text}"
+                    )
                     if tool_calls:
                         call_names = []
                         for tc in tool_calls:
@@ -522,7 +634,11 @@ def format_execution_log_history() -> str:
                                 call_names.append(name)
                         lines.append(f"  - 调用工具: {', '.join(call_names)}")
                 else:
-                    lines.append(f"  - 回复: {str(content)[:500]}")
+                    snippet = LOG_STEP_SNIPPET_CHARS
+                    content_str = str(content)
+                    lines.append(
+                        f"  - 回复: {content_str[:snippet]}..." if len(content_str) > snippet else f"  - 回复: {content_str}"
+                    )
             
             elif step_type == "tool_call":
                 if metadata:
@@ -550,8 +666,12 @@ def format_execution_log_history() -> str:
                     else:
                         lines.append(f"  - 工具名: `{tool_name}`")
                     
-                    args_str = str(content.get("arguments", {}))[:500]
-                    lines.append(f"  - 参数: {args_str}..." if len(str(content.get("arguments", {}))) > 500 else f"  - 参数: {args_str}")
+                    snippet = LOG_STEP_SNIPPET_CHARS
+                    args_str_full = str(content.get("arguments", {}))
+                    args_str = args_str_full[:snippet]
+                    lines.append(
+                        f"  - 参数: {args_str}..." if len(args_str_full) > snippet else f"  - 参数: {args_str}"
+                    )
             
             elif step_type == "tool_result":
                 if metadata:
@@ -578,14 +698,46 @@ def format_execution_log_history() -> str:
                         lines.append(f"  - 工具: `{tool_name}`")
                     
                     lines.append(f"  - 执行类: `{invoked_module}.{invoked_class}`")
-                result_str = str(content)
-                lines.append(f"  - 结果: {result_str[:500]}..." if len(result_str) > 500 else f"  - 结果: {result_str}")
+                formatted_result, is_block = _format_observation_for_ui(content)
+                if is_block:
+                    lines.append("  - 结果:")
+                    lines.append(formatted_result)
+                else:
+                    lines.append(f"  - 结果: {formatted_result}")
             
             elif step_type == "final_answer":
-                lines.append(f"  - 最终回答: {content[:500]}..." if len(str(content)) > 500 else f"  - 最终回答: {content}")
+                snippet = LOG_STEP_SNIPPET_CHARS
+                content_str = str(content)
+                lines.append(
+                    f"  - 最终回答: {content_str[:snippet]}..." if len(content_str) > snippet else f"  - 最终回答: {content_str}"
+                )
             
             elif step_type == "llm_error":
                 lines.append(f"  - ❌ 错误: {content}")
+
+            elif step_type == "ontology_inference":
+                if isinstance(content, dict):
+                    inference_type = content.get('inference_type', 'unknown')
+                    lines.append(f"  - 推理类型: `{inference_type}`")
+                    lines.append(f"  - 订单ID: {content.get('order_id')}")
+                    if content.get('order_no'):
+                        lines.append(f"  - 订单号: {content.get('order_no')}")
+                    lines.append(f"  - 状态: {content.get('order_status')}")
+                    lines.append(f"  - 距下单: {content.get('hours_since_created')} 小时")
+                    lines.append(f"  - 有物流: {'是' if content.get('has_shipment') else '否'}")
+                    policy = content.get('policy')
+                    if policy:
+                        snippet = LOG_STEP_SNIPPET_CHARS
+                        policy_str = json.dumps(policy, ensure_ascii=False)
+                        lines.append(
+                            f"  - 推理结果: {policy_str[:snippet]}..." if len(policy_str) > snippet else f"  - 推理结果: {policy_str}"
+                        )
+                else:
+                    lines.append(f"  - 内容: {content}")
+                if metadata:
+                    lines.append(f"  - 来源: {metadata.get('source', 'unknown')}")
+                    if metadata.get('ontology_method'):
+                        lines.append(f"  - 方法: {metadata['ontology_method']}")
             
             lines.append("")
         
@@ -751,15 +903,38 @@ def format_ecommerce_analysis() -> str:
     return "\n".join(lines)
 
 
+def _normalize_chatbot_messages(history):
+    normalized = []
+    if not history:
+        return normalized
+    for entry in history:
+        if isinstance(entry, dict):
+            role = entry.get("role") or ("assistant" if normalized and normalized[-1]["role"] == "user" else "user")
+            content = entry.get("content")
+            normalized.append({
+                "role": role,
+                "content": "" if content is None else str(content),
+            })
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            user_msg, assistant_msg = entry
+            if user_msg is not None:
+                normalized.append({"role": "user", "content": str(user_msg)})
+            if assistant_msg is not None:
+                normalized.append({"role": "assistant", "content": str(assistant_msg)})
+        else:
+            continue
+    return normalized
+
+
 def handle_user_message(user_message, chat_history=None):
     """处理用户消息并更新 UI"""
     from datetime import datetime
     global CONVERSATION_COUNTER, PLAN_HISTORY, TOOL_CALL_HISTORY
     
-    chat_history = list(chat_history or [])
-    # 添加用户消息到历史（如果还没有添加）
-    if not chat_history or chat_history[-1][0] != user_message:
-        chat_history.append([user_message, None])
+    chat_history = _normalize_chatbot_messages(chat_history)
+    chat_history.append({"role": "user", "content": user_message})
+    assistant_placeholder = {"role": "assistant", "content": ""}
+    chat_history.append(assistant_placeholder)
 
     LOGGER.info("Gradio incoming: %s", user_message[:200])
     
@@ -876,7 +1051,7 @@ def handle_user_message(user_message, chat_history=None):
         execution_log = f"## 📋 执行日志历史\n\n**执行失败**: {error_msg}"
         ecommerce_display = f"## 🛍️ 电商分析\n\n**执行失败**: {error_msg}"
 
-    chat_history[-1][1] = final
+    assistant_placeholder["content"] = final
     memory_md = format_memory_context()
     
     return (
@@ -947,7 +1122,7 @@ with gr.Blocks(
     with gr.Row(equal_height=False, elem_classes="main-layout-row"):
         # 左侧: 聊天区域
         with gr.Column(scale=3, elem_classes="left-panel"):
-            chatbot = gr.Chatbot(elem_id="mcp_chat", label="对话历史", height=600)
+            chatbot = gr.Chatbot(elem_id="mcp_chat", label="对话历史", height=600, type="messages")
             
             # 🎯 便捷测试短语区域 - 10个快捷按钮
             gr.Markdown("### 🚀 快捷测试短语（点击即可提问）")
@@ -1002,12 +1177,15 @@ with gr.Blocks(
     def submit_and_update(message, history):
         """提交消息并更新所有面板 - 先显示用户消息，再获取回复"""
         # 第一步：立即显示用户消息（Assistant回复为"思考中..."）并禁用所有按钮
-        history = list(history or [])
-        history.append([message, "⏳ 正在思考..."])
+        base_history = _normalize_chatbot_messages(history)
+        pending_history = base_history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": "⏳ 正在思考..."},
+        ]
         
         # 立即返回更新（禁用按钮，防止重复提交）
         yield (
-            gr.update(value=history),  # chatbot
+            gr.update(value=pending_history),  # chatbot
             gr.update(),  # plan_md (保持不变)
             gr.update(),  # tool_md (保持不变)
             gr.update(),  # memory_md (保持不变)
@@ -1028,7 +1206,7 @@ with gr.Blocks(
         )
         
         # 第二步：调用后端获取真实回复
-        result = handle_user_message(message, history[:-1])  # 传入不包含"思考中"的历史
+        result = handle_user_message(message, base_history)
         
         # 第三步：返回完整结果（启用所有按钮）
         yield (

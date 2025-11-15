@@ -170,10 +170,27 @@ print(formatted)
 
 ### 1. 内容截断
 
-为避免日志过大,自动截断长内容:
-- 工具结果: 500 字符
-- LLM 输出: 300 字符
-- 其他内容: 根据类型适当截断
+为避免日志过大,自动截断长内容(默认 4000 字符)。可通过 `TOOL_LOG_MAX_CHARS` 环境变量调整上限:
+
+```bash
+export TOOL_LOG_MAX_CHARS=8000
+```
+
+此外,执行日志历史中的文字摘要默认为 500 字符,可通过 `EXEC_LOG_SNIPPET_CHARS` 调整:
+
+```bash
+export EXEC_LOG_SNIPPET_CHARS=1200
+```
+
+该参数影响 LLM 输出摘要、工具参数片段、最终回答等短文本渲染。
+
+也可以直接在 `src/agent/config.yaml` 中的 `ui` 段落设置:
+
+```yaml
+ui:
+  tool_log_max_chars: 8000
+  execution_log_snippet_chars: 1200
+```
 
 ### 2. 选择性记录
 

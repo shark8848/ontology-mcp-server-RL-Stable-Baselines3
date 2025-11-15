@@ -22,6 +22,7 @@ venv/
 logs/
 src/agent/logs/
 src/ontology_mcp_server/logs/
+src/agent/config.yaml
 
 # Data
 data/ecommerce.db

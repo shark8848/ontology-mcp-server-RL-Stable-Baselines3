@@ -164,12 +164,12 @@ python scripts/update_demo_user_names.py --seed 2025
 
 ### 3. 配置 LLM
 
-在 `src/agent/config.yaml` 中配置 LLM（支持 DeepSeek 或任何 OpenAI 兼容 API）：
+在 `src/agent/config.yaml` 中配置 LLM（支持 DeepSeek、OpenAI 兼容 API，或本地 Ollama）：
 
 ```yaml
 llm:
   provider: "deepseek"
-  api_url: "https://api.deepseek.com"
+  api_url: "https://api.deepseek.com/v1"
   api_key: "your-api-key-here"
   model: "deepseek-chat"
   temperature: 0.7
@@ -179,9 +179,20 @@ llm:
 或使用环境变量：
 
 ```bash
-export OPENAI_API_URL="https://api.deepseek.com"
+export OPENAI_API_URL="https://api.deepseek.com/v1"
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_MODEL="deepseek-chat"
+
+# 切换到本地 Ollama（qwen3:8b）
+export LLM_PROVIDER="ollama"
+export OLLAMA_API_URL="http://localhost:11434/v1"
+export OLLAMA_MODEL="qwen3:8b"
+# Ollama 不校验密钥，任何非空值即可
+export OLLAMA_API_KEY="ollama"
+
+# 确保本地已运行 `ollama serve` 且镜像存在：
+#   ollama pull qwen3:8b
+#   ollama run qwen3:8b --keepalive 5m
 ```
 
 ### 4. 启动服务
@@ -805,27 +816,41 @@ ONTOLOGY_USE_OWLREADY2=false       # 是否使用 Owlready2 推理
 
 **Agent & LLM**:
 ```bash
-OPENAI_API_URL=https://api.deepseek.com  # LLM API 地址
+OPENAI_API_URL=https://api.deepseek.com/v1  # LLM API 地址
 OPENAI_API_KEY=your-api-key              # API 密钥
 OPENAI_MODEL=deepseek-chat               # 模型名称
 MCP_BASE_URL=http://localhost:8000       # MCP 服务器地址
+LLM_PROVIDER=deepseek                    # deepseek | ollama
+
+# 使用本地 Ollama 时
+LLM_PROVIDER=ollama
+OLLAMA_API_URL=http://localhost:11434/v1
+OLLAMA_MODEL=qwen3:8b
+OLLAMA_API_KEY=ollama
 ```
 
 **记忆系统**:
 ```bash
 MEMORY_BACKEND=chromadb            # 记忆后端 (chromadb/simple)
-MEMORY_MODE=recent                 # 检索模式 (recent/similarity/hybrid)
-MEMORY_MAX_HISTORY=10              # 最大历史记录数
-```
-
+  provider: "deepseek"            # 或 "ollama"
+  api_url: "https://api.deepseek.com/v1"
+  api_key: "${OPENAI_API_KEY}"
+  model: "deepseek-chat"
 ### config.yaml 配置
 
+
+# 支持切换到本地 Ollama（示例）
+llm_ollama_example:
+  provider: "ollama"
+  api_url: "http://localhost:11434/v1"
+  api_key: "ollama"
+  model: "qwen3:8b"
 完整配置示例见 `src/agent/config.yaml`：
 
 ```yaml
 llm:
   provider: "deepseek"
-  api_url: "https://api.deepseek.com"
+  api_url: "https://api.deepseek.com/v1"
   api_key: "${OPENAI_API_KEY}"
   model: "deepseek-chat"
   temperature: 0.7
@@ -1111,6 +1136,7 @@ test_shacl_validation_detects_violations PASSED ✅
 - 🏷️ 项目正式启用 **Ontology RL Commerce Agent** 名称，并在首页说明沿用原名 Ontology MCP Server 的原因与 RL 升级背景
 - 🙏 “致谢”模块补充 Stable Baselines3/Gymnasium/TensorBoard 等强化学习训练栈，并对核心依赖逐一标注作用
 - 🛡️ 工具层新增 `order_id` 合法性校验，自动识别 `ORD...` 编号并拦截超出 SQLite 支持范围的超大整数，避免 RL 场景触发 `OverflowError`
+- 🧩 LLM 适配层加入 `LLM_PROVIDER=ollama` 流程，可在本地一键切换至 `ollama serve` 中的 `qwen3:8b` 模型，支持离线推理与隐私部署
 
 **影响**:
 - 读者在文档开头即可理解项目定位与命名演进

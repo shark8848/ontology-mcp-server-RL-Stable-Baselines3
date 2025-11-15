@@ -370,6 +370,97 @@ class EcommerceOntologyService:
             'conditions': conditions,
             'reason': reason
         }
+
+    # ============================================
+    # 取消规则推理
+    # ============================================
+
+    def infer_cancellation_policy(
+        self,
+        order_status: str,
+        hours_since_created: float,
+        has_shipment: bool = False,
+    ) -> Dict[str, Any]:
+        """推理订单是否允许取消及其理由."""
+
+        status = (order_status or "pending").lower()
+        hours = max(float(hours_since_created or 0.0), 0.0)
+
+        policy = {
+            "status": status,
+            "hours_since_order": hours,
+            "allowed": False,
+            "rule": "DefaultCancellationRule",
+            "deadline_hours": None,
+            "reason": "订单状态不支持取消",
+        }
+
+        if status in {"shipped", "delivered"} or has_shipment:
+            policy.update(
+                {
+                    "allowed": False,
+                    "rule": "ShippedCancellationBlockRule",
+                    "deadline_hours": 0,
+                    "reason": "订单已发货，需走退货流程",
+                }
+            )
+            LOGGER.info("取消规则推理: %s", policy["reason"])
+            return policy
+
+        if status == "pending":
+            deadline = 24.0
+            policy["deadline_hours"] = deadline
+            if hours <= deadline:
+                policy.update(
+                    {
+                        "allowed": True,
+                        "rule": "Pending24hCancellationRule",
+                        "reason": "待支付订单24小时内可直接取消",
+                    }
+                )
+            else:
+                policy["reason"] = "已超过24小时待支付取消窗口"
+            LOGGER.info("取消规则推理: %s", policy["reason"])
+            return policy
+
+        if status == "paid":
+            deadline = 12.0
+            policy["deadline_hours"] = deadline
+            if has_shipment:
+                policy.update(
+                    {
+                        "allowed": False,
+                        "rule": "ShippedCancellationBlockRule",
+                        "reason": "已生成物流单，无法取消",
+                    }
+                )
+            elif hours <= deadline:
+                policy.update(
+                    {
+                        "allowed": True,
+                        "rule": "Paid12hCancellationRule",
+                        "reason": "已支付12小时内且未发货，可人工审核后取消",
+                    }
+                )
+            else:
+                policy["reason"] = "已超过12小时支付取消窗口"
+            LOGGER.info("取消规则推理: %s", policy["reason"])
+            return policy
+
+        if status in {"cancelled", "returned"}:
+            policy.update(
+                {
+                    "allowed": False,
+                    "rule": "AlreadyTerminatedCancellationRule",
+                    "reason": "订单已终止，无需再次取消",
+                }
+            )
+            LOGGER.info("取消规则推理: %s", policy["reason"])
+            return policy
+
+        policy["reason"] = "当前状态不支持自动取消，请联系客服"
+        LOGGER.info("取消规则推理: %s", policy["reason"])
+        return policy
     
     # ============================================
     # 综合推理

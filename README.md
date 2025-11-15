@@ -1086,6 +1086,18 @@ test_shacl_validation_detects_violations PASSED ✅
 
 ## � 版本迭代历史
 
+### v1.2.3 (2025-11-15) - 项目更名与框架致谢
+
+**主要更新**:
+- 🏷️ 项目正式启用 **Ontology RL Commerce Agent** 名称，并在首页说明沿用原名 Ontology MCP Server 的原因与 RL 升级背景
+- 🙏 “致谢”模块补充 Stable Baselines3/Gymnasium/TensorBoard 等强化学习训练栈，并对核心依赖逐一标注作用
+
+**影响**:
+- 读者在文档开头即可理解项目定位与命名演进
+- 技术栈溯源更加清晰，方便社区贡献或替换依赖
+
+---
+
 ### v1.2.2 (2025-11-12) - README 强化学习导引
 
 **新增内容**:
@@ -1289,15 +1301,15 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 
 ---
 
-## �🙏 致谢
+## 🙏 致谢（核心框架）
 
-- **LangChain**: AI Agent 框架
-- **FastAPI**: 高性能 Web 框架
-- **Gradio**: 快速 UI 原型工具
-- **ChromaDB**: 向量数据库
-- **DeepSeek**: LLM 服务提供商
-- **RDFLib & PySHACL**: 本体推理工具
-- **SQLAlchemy**: Python ORM 框架
+- **LangChain & FastAPI**：驱动 ReAct Agent 推理与 MCP Server API 的基础框架
+- **Gradio**：提供 5 Tab 电商 UI 的可视化与交互壳层
+- **ChromaDB & SQLite**：分别承担语义记忆与业务数据存储
+- **Stable Baselines3 / Gymnasium / TensorBoard**：强化学习训练、评估和可视化的完整闭环工具链
+- **DeepSeek**：LLM 能力提供商，支持自适应推理与回复生成
+- **RDFLib & PySHACL**：本体推理与 SHACL 规则校验的关键组件
+- **SQLAlchemy**：数据库 ORM 层的核心依赖
 
 ---
 

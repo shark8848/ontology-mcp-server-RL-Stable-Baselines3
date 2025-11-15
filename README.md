@@ -1,6 +1,6 @@
-# Ontology MCP Server
+# Ontology RL Commerce Agent
 
-🛍️ **自进化的电商 AI 助手系统**，在 MCP (Model Context Protocol) 架构之上融合本体推理、电商业务逻辑、记忆系统与 Gradio UI，可直接复现完整购物体验。
+🛍️ **Ontology RL Commerce Agent（原名 Ontology MCP Server）**，为了突出最新的强化学习自进化闭环能力，对项目名称进行了升级；系统依旧基于 MCP (Model Context Protocol) 架构融合本体推理、电商业务逻辑、记忆系统与 Gradio UI，可直接复现完整购物体验。
 
 🤖 **强化学习驱动的 Agent**：项目内置 Stable Baselines3 PPO 训练管线，从 **数据 → 训练 → 评估 → 部署** 完整闭环出发，支持 Agent 在真实语料与工具调用日志上持续自我迭代，自动学会更高效、更安全的工具编排策略。
 

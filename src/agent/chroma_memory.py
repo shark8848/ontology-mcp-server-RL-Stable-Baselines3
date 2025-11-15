@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import json
 import re
+import shutil
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -135,15 +136,8 @@ class ChromaConversationMemory:
             )
         )
         
-        # 获取或创建 collection
-        try:
-            self.collection = self.client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"description": "Conversation memory storage"}
-            )
-        except Exception as e:
-            LOGGER.error("Failed to create Chroma collection: %s", e)
-            raise
+        # 获取或创建 collection（兼容新版本的 metadata 限制）
+        self.collection = self._create_collection_with_retry()
         
         # 内存缓存(用于快速访问当前会话)
         self._cache: List[ConversationTurn] = []
@@ -158,6 +152,50 @@ class ChromaConversationMemory:
             self.session_id, self.persist_directory, self.collection_name,
             config.strategy.retrieval_mode
         )
+
+    def _create_collection_with_retry(self):
+        """创建 collection，处理 legacy metadata 兼容逻辑"""
+        try:
+            return self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"description": "Conversation memory storage"}
+            )
+        except Exception as exc:
+            if self._is_reserved_metadata_error(exc):
+                LOGGER.warning(
+                    "检测到旧版 Chroma 元数据格式(_type)与当前版本不兼容，将自动备份并重建索引"
+                )
+                self._backup_and_reset_store()
+                return self.client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"description": "Conversation memory storage"}
+                )
+            LOGGER.error("Failed to create Chroma collection: %s", exc)
+            raise
+
+    @staticmethod
+    def _is_reserved_metadata_error(error: Exception) -> bool:
+        message = str(error) if error else ""
+        return "_type" in message
+
+    def _backup_and_reset_store(self) -> None:
+        """备份旧版数据并重置客户端，避免 _type 元数据导致的初始化失败"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = os.path.basename(self.persist_directory.rstrip(os.sep)) or "chroma_memory"
+        parent_dir = os.path.dirname(self.persist_directory.rstrip(os.sep)) or os.getcwd()
+        backup_dir = os.path.join(parent_dir, f"{base_name}_legacy_{timestamp}")
+        try:
+            if os.path.exists(self.persist_directory):
+                shutil.copytree(self.persist_directory, backup_dir, dirs_exist_ok=False)
+                LOGGER.warning("已备份旧 Chroma 数据到: %s", backup_dir)
+        except Exception as backup_error:
+            LOGGER.warning("备份旧 Chroma 数据失败: %s", backup_error)
+        try:
+            self.client.reset()
+            LOGGER.warning("旧 Chroma 索引已清空，已准备重新创建 collection")
+        except Exception as reset_error:
+            LOGGER.error("重置 Chroma 客户端失败: %s", reset_error)
+            raise
     
     def _load_session_cache(self):
         """从 ChromaDB 加载当前会话的历史到缓存"""
@@ -323,6 +361,7 @@ Agent: {turn.agent_response}
         # 合并额外元数据
         if metadata:
             chroma_metadata.update(metadata)
+        chroma_metadata = self._sanitize_metadata(chroma_metadata)
         
         # 存储到 ChromaDB
         try:
@@ -340,6 +379,28 @@ Agent: {turn.agent_response}
         self._cache.append(turn)
         
         return turn
+
+    def _sanitize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """过滤掉以下划线开头的键，并确保值可序列化"""
+        if not metadata:
+            return {}
+        sanitized: Dict[str, Any] = {}
+        for key, value in metadata.items():
+            sanitized_key = str(key)
+            if sanitized_key.startswith("_"):
+                sanitized_key = sanitized_key.lstrip("_") or "meta"
+                LOGGER.debug("检测到以下划线开头的元数据键，已自动重命名: %s", key)
+            sanitized[sanitized_key] = self._coerce_metadata_value(value)
+        return sanitized
+
+    @staticmethod
+    def _coerce_metadata_value(value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
     
     def get_recent_turns(self, n: int = 5) -> List[ConversationTurn]:
         """获取最近N轮对话

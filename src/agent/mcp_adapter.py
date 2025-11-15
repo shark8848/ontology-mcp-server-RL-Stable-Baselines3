@@ -9,8 +9,11 @@ from __future__ import annotations
 # Repository: https://github.com/shark8848/ontology-mcp-server
 """MCP HTTP 适配器 + 工具封装。"""
 
+import ast
 import json
+import operator
 import os
+import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Tuple, Type, Union, get_args, get_origin
@@ -33,6 +36,89 @@ def _sanitize_schema(obj: Any) -> None:
     elif isinstance(obj, list):
         for item in obj:
             _sanitize_schema(item)
+
+
+_MATH_EXPR_PATTERN = re.compile(r"^[0-9\.+\-*/()\s]+$")
+
+
+def _evaluate_math_expression(expr: str) -> float:
+    """Safely evaluate simple arithmetic expressions used inside arguments."""
+
+    allowed_bin_ops = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+    }
+    allowed_unary_ops = {
+        ast.UAdd: operator.pos,
+        ast.USub: operator.neg,
+    }
+
+    def _eval(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)):
+                return float(node.value)
+            raise ValueError("不支持的常量类型")
+        if isinstance(node, ast.BinOp) and type(node.op) in allowed_bin_ops:
+            left = _eval(node.left)
+            right = _eval(node.right)
+            return allowed_bin_ops[type(node.op)](left, right)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_unary_ops:
+            operand = _eval(node.operand)
+            return allowed_unary_ops[type(node.op)](operand)
+        raise ValueError("仅支持简单算术表达式")
+
+    tree = ast.parse(expr, mode="eval")
+    return float(_eval(tree))
+
+
+def _parse_argument_string(raw: str) -> Dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            import yaml
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ValueError("参数既不是合法 JSON，也无法载入 YAML") from exc
+        try:
+            data = yaml.safe_load(text)
+        except Exception as exc:  # pragma: no cover - YAML parse errors
+            raise ValueError("参数 YAML 解析失败") from exc
+    if not isinstance(data, dict):
+        raise ValueError("工具参数必须为对象类型")
+    return data
+
+
+def _resolve_annotation(annotation: Any) -> Any:
+    origin_type = get_origin(annotation)
+    if origin_type is Union:
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        return _resolve_annotation(args[0]) if args else Any
+    return annotation
+
+
+def _maybe_eval_numeric_literal(value: Any, expected: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    expr = value.strip()
+    if not expr or not _MATH_EXPR_PATTERN.match(expr):
+        return value
+    try:
+        evaluated = _evaluate_math_expression(expr)
+    except Exception:
+        return value
+    if expected is int and float(evaluated).is_integer():
+        return int(evaluated)
+    return float(evaluated)
 
 
 @dataclass
@@ -107,13 +193,33 @@ class ToolDefinition:
         }
 
     def parse_arguments(self, raw_args: str | Dict[str, Any]) -> Dict[str, Any]:
-        data = raw_args
-        if isinstance(raw_args, str):
+        data: Any = raw_args
+
+        if isinstance(data, dict) and "_raw" in data and isinstance(data["_raw"], (str, dict)):
+            # LangChain/Gradio 有时会包装一层 `_raw`，需要拆开
+            data = data["_raw"]
+
+        if isinstance(data, str):
             try:
-                data = json.loads(raw_args or "{}")
-            except json.JSONDecodeError as exc:
+                data = _parse_argument_string(data)
+            except ValueError as exc:
                 raise ValueError(f"工具 {self.name} 参数解析失败: {exc}") from exc
-        model = self.args_schema.model_validate(data or {})
+
+        if data is None:
+            data = {}
+
+        if not isinstance(data, dict):
+            raise ValueError(f"工具 {self.name} 参数必须是对象类型")
+
+        normalized = dict(data)
+        for field_name, field_info in self.args_schema.model_fields.items():
+            if field_name not in normalized:
+                continue
+            target_type = _resolve_annotation(field_info.annotation)
+            if target_type in (int, float):
+                normalized[field_name] = _maybe_eval_numeric_literal(normalized[field_name], target_type)
+
+        model = self.args_schema.model_validate(normalized or {})
         return model.model_dump()
 
     def invoke(self, parsed_args: Dict[str, Any]) -> Any:

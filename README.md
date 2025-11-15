@@ -63,7 +63,10 @@ ontology-mcp-server/
 │   ├── run_server.sh          # 启动 MCP 服务器
 │   ├── run_agent.sh           # 启动 Gradio UI
 │   ├── init_database.py       # 初始化数据库表结构
-│   └── seed_data.py           # 填充测试数据
+│   ├── seed_data.py           # 填充测试数据
+│   ├── add_bulk_products.py   # 生成并注入 1000 款商品
+│   ├── add_bulk_users.py      # 生成并注入 200 名用户
+│   └── update_demo_user_names.py # 随机刷新示例用户(1-5)姓名
 │
 ├── docs/                      # 文档
 │   ├── PHASE3_COMPLETION_REPORT.md
@@ -111,6 +114,13 @@ python scripts/init_database.py
 
 # 填充测试数据（5个用户 + 8个商品）
 python scripts/seed_data.py
+
+# 批量扩展商品与用户（可选）
+python scripts/add_bulk_products.py
+python scripts/add_bulk_users.py
+
+# 随机刷新示例用户姓名（可选）
+python scripts/update_demo_user_names.py --seed 2025
 ```
 
 **创建的测试用户**:
@@ -361,6 +371,82 @@ curl -X POST http://localhost:8000/invoke \
 - 基于浏览历史和购物车
 - 会员等级优惠提示
 - 相关商品关联
+
+## 🧠 强化学习自进化 (Phase 6)
+
+### 目标与收益
+- 让 ReAct Agent 通过 Stable Baselines3 PPO 离线自我改进，减少人工 prompt 调参
+- 以 128 维状态向量统一描述用户上下文、意图、工具调用与商品状态
+- 多目标奖励函数同时约束任务成功率、效率、满意度与安全合规
+- 通过 Gymnasium 环境复用 LangChain Agent，避免重写业务逻辑
+
+### 模块概览 (`src/agent/rl_agent/`)
+| 文件 | 作用 | 关键点 |
+| --- | --- | --- |
+| `state_extractor.py` | 将多源对话数据编码为 128 维状态 | 支持文本嵌入/简单特征，容错意图字符串或对象 |
+| `reward_calculator.py` | 多目标奖励 | `task/efficiency/satisfaction/safety` 4 组件 + Episode 汇总 |
+| `gym_env.py` | `EcommerceGymEnv` | 22 个离散动作（21 工具 + 直接回复），自动构造步骤奖励 |
+| `ppo_trainer.py` | 训练编排 | DummyVecEnv + Eval/Checkpoint 回调 + TensorBoard 日志 |
+| `train_rl_agent.py` | CLI 入口 | 可配置步数 / 评估频率 / 检查点 / 文本嵌入 |
+
+**示例对话脚本 + 用户模拟**
+
+- `data/training_scenarios/sample_dialogues.json`：9 组交易驱动语料，55% 聚焦成交闭环，其余 45% 覆盖咨询/问题/客服/退货四类诉求，并引用最新的 1000 款商品与 200 名用户信息。PPO 训练会在 episode 内沿脚本逐条注入用户话术，不再重复“你好”，而是模拟真实购物对话（可自定义脚本路径或内容）。
+
+### 奖励分解
+- `任务完成 (R_task)`：+10 奖励成功下单；关键信息缺失或响应为空即扣分
+- `效率 (R_efficiency)`：鼓励少量工具调用与低延迟；调用过多或超时扣分
+- `满意度 (R_satisfaction)`：结合实时质量分，奖励主动引导、降低澄清率
+- `安全合规 (R_safety)`：默认 +1，检测异常日志、SHACL 失败或危险工具误用时 -10 ~ -0.5
+
+### 训练前快速校验
+```bash
+source .venv/bin/activate
+export ONTOLOGY_DATA_DIR="$(pwd)/data"
+python test_rl_modules.py
+```
+
+### 启动 PPO 训练
+```bash
+source .venv/bin/activate
+export ONTOLOGY_DATA_DIR="$(pwd)/data"
+python train_rl_agent.py \
+  --timesteps 100000 \
+  --eval-freq 2000 \
+  --checkpoint-freq 20000 \
+  --output-dir data/rl_training \
+  --max-steps-per-episode 12
+```
+
+**产物位置**
+- 最佳模型：`data/rl_training/best_model/`
+- 最终模型：`data/rl_training/models/ppo_ecommerce_final.zip`
+- TensorBoard 日志：`data/rl_training/logs/tensorboard/`
+- Episode 统计：`data/rl_training/logs/training_log.json`
+
+### 训练循环示意 (Mermaid)
+
+```mermaid
+flowchart LR
+  subgraph Env[Gymnasium Environment]
+    U[用户输入采样] --> A[Action: 22 离散动作]
+    A -->|调用工具 / 直接回复| R[ReAct Agent]
+    R --> T[Tool Log & 质量指标]
+    T --> S[StateExtractor 128 维]
+    S --> E[RewardCalculator]
+  end
+  E --> PPO[PPO Trainer]
+  PPO -->|策略更新| Env
+  PPO -->|EvalCallback| Best[(best_model)]
+  PPO -->|CheckpointCallback| CKPT[(checkpoints)]
+```
+
+### 常见调优建议
+- `--use-text-embedding`：资源允许时开启，可让状态表征更细腻
+- `reward_weights`：在 `PPOTrainer` 初始化时传入，快速平衡任务成功率 vs. 安全
+- `max_steps_per_episode`：缩短 Episode 有助于高频评估，拉长可鼓励完整购物链路
+
+> 如需离线复现实验，可在 `data/rl_training/logs/tensorboard` 运行 `tensorboard --logdir <path>` 查看奖励曲线和策略收敛情况。
 
 ## 🎯 本体推理规则覆盖率
 

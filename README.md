@@ -1,6 +1,8 @@
 # Ontology MCP Server
 
-🛍️ **完整的电商 AI 助手系统**，集成本体推理、电商业务逻辑、对话记忆和可视化 UI。该项目基于 MCP (Model Context Protocol) 架构，提供语义化推理能力和完整的购物对话体验。
+🛍️ **自进化的电商 AI 助手系统**，在 MCP (Model Context Protocol) 架构之上融合本体推理、电商业务逻辑、记忆系统与 Gradio UI，可直接复现完整购物体验。
+
+🤖 **强化学习驱动的 Agent**：项目内置 Stable Baselines3 PPO 训练管线，从 **数据 → 训练 → 评估 → 部署** 完整闭环出发，支持 Agent 在真实语料与工具调用日志上持续自我迭代，自动学会更高效、更安全的工具编排策略。
 
 ## 🎯 项目特性
 
@@ -11,6 +13,7 @@
 - **💬 智能对话**：基于 LangChain 的 ReAct Agent，支持多轮对话、上下文理解、状态跟踪
 - **🧩 记忆系统**：ChromaDB 驱动的对话记忆，支持历史回溯和语义检索
 - **📊 可视化 UI**：Gradio 界面展示对话、工具调用、状态跟踪、质量分析
+- **🧠 强化学习闭环**：`scripts/generate_dialogue_corpus.py` + `train_rl_agent.py` 构建 220 条高质量语料、Stable Baselines3 PPO 训练、TensorBoard 评估与 Agent 推理联调，实现 0→1 自动演进
 
 ### Phase 完成状态
 
@@ -1082,6 +1085,18 @@ test_shacl_validation_detects_violations PASSED ✅
 作者: shark8848
 
 ## � 版本迭代历史
+
+### v1.2.2 (2025-11-12) - README 强化学习导引
+
+**新增内容**:
+- 🧠 首页介绍加入强化学习闭环描述，突出 Agent 在真实语料上的自我进化能力
+- 🔁 `项目特性` 新增“强化学习闭环”能力点，串联数据生成、训练、TensorBoard 评估和上线应用
+
+**目的**:
+- 帮助读者在 README 前两章节即了解 0→1 训练路径和 RL 自演进价值
+- 为后续 Phase 6 章节提供上下文衔接，形成更连贯的文档叙事
+
+---
 
 ### v1.2.0 (2025-11-11) - 动态用户上下文系统
 

@@ -1,0 +1,27 @@
+# 训练控制台默认配置
+
+data_root: data/training_dashboard
+
+corpus:
+  static_paths:
+    - data/training_scenarios/sample_dialogues.json
+  log_source_path: src/ontology_mcp_server/logs/server.log
+  log_corpus_dir: data/training_dashboard/log_corpus
+  ingest_interval_minutes: 60
+  min_dialogues_per_batch: 5
+
+training:
+  timesteps: 50000
+  eval_freq: 1000
+  checkpoint_freq: 5000
+  max_steps_per_episode: 10
+  use_text_embedding: false
+  output_dir: data/rl_training
+
+model_registry:
+  registry_root: data/training_dashboard/models
+  active_model_dir: data/rl_training/active_model
+
+agent_loader:
+  strategy: file_copy
+  touch_file: data/training_dashboard/agent_loader/last_update.txt

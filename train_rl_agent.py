@@ -54,6 +54,12 @@ def main():
         default=10,
         help="每个 episode 最大步数 (默认: 10)"
     )
+    parser.add_argument(
+        "--scenario-file",
+        type=str,
+        default=None,
+        help="指定训练场景 JSON 文件，默认使用内置示例语料"
+    )
     
     args = parser.parse_args()
     
@@ -65,6 +71,8 @@ def main():
     print(f"检查点频率: {args.checkpoint_freq}")
     print(f"输出目录: {args.output_dir}")
     print(f"文本嵌入: {args.use_text_embedding}")
+    if args.scenario_file:
+        print(f"训练语料: {args.scenario_file}")
     print("="*60)
     
     # 1. 创建基础 Agent
@@ -84,6 +92,7 @@ def main():
         agent=agent,
         output_dir=args.output_dir,
         use_text_embedding=args.use_text_embedding,
+        scenario_file=args.scenario_file,
     )
     print("✓ 训练器创建成功")
     

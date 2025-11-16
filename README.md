@@ -475,9 +475,12 @@ python train_rl_agent.py \
   --eval-freq 2000 \
   --checkpoint-freq 20000 \
   --output-dir data/rl_training \
-  --max-steps-per-episode 12
+  --max-steps-per-episode 12 \
+  --scenario-file data/training_scenarios/sample_dialogues.json
 ```
 训练日志实时写入 `data/rl_training/logs/tensorboard/`，可通过 `tensorboard --logdir data/rl_training/logs/tensorboard` 观察奖励、loss、评估曲线。
+
+> `--scenario-file` 参数可将任意符合 `{ "scenarios": [...] }` 结构的语料注入训练流程。若不指定，则默认读取 `data/training_scenarios/sample_dialogues.json`。
 
 #### 3. 评估与模型产物
 - 最佳模型：`data/rl_training/best_model/best_model.zip`
@@ -530,6 +533,29 @@ PY
 
 #### 5. 回放与再训练
 只需替换 `sample_dialogues.json` 或追加新的语料文件，然后重复“训练阶段”命令即可。`train_rl_agent.py` 在检测到现有模型后，会自动继续训练并写入新的 checkpoints（可更换 `--output-dir` 保存多套策略）。
+
+### 🖥️ RL 训练控制台（Gradio）
+
+`src/training_dashboard/` 模块提供了一套独立的 Gradio 控制台，覆盖语料聚合、训练调度、指标可视化、模型回收以及一键加载 Agent，方便在无人值守的环境中运行 RL 闭环。
+
+1. **准备配置**：复制示例配置并根据需要修改路径/阈值。
+  ```bash
+  cp config/training_dashboard.example.yaml config/training_dashboard.yaml
+  # 编辑 config/training_dashboard.yaml 调整日志路径、语料源、训练输出等
+  ```
+2. **启动控制台**：
+  ```bash
+  source .venv/bin/activate
+    PYTHONPATH=src python scripts/run_training_dashboard.py
+  ```
+  默认运行在 `http://127.0.0.1:7860`（如端口被占用会自动递增，终端会显示最终访问地址）。
+3. **功能概览**：
+  - **概览**：实时查看训练状态、最新指标、奖励/长度曲线以及原始日志；日志文本框每 3 秒自动滚动刷新，状态刷新按钮会读取 `data/rl_training/logs/training_log.json` 并生成折线图。
+  - **语料管理**：配置静态语料清单、周期性提炼服务端日志，支持一键手动提炼与静态/日志语料混合导出；系统会生成合并后的 `combined_*.json` 并作为 `--scenario-file` 输入。
+  - **训练控制**：可视化调整步数、评估频率、Episode 长度、文本嵌入开关以及语料来源，点击“启动训练”即调用 `train_rl_agent.py` 并自动传入最新语料路径。
+  - **模型管理**：列出现有训练产物（best/final），查看元数据，选择版本后推送到 `data/rl_training/active_model/`，供在线 Agent 热加载。
+
+> 日志提炼调度器会在后台以守护线程运行，关闭控制台或终止进程时会自动停止。训练日志在内存中保留最近约 2000 行，可配合 3 秒刷新频率查看连续输出，便于实时排查训练异常。
 
 ### 奖励分解
 - `任务完成 (R_task)`：+10 奖励成功下单；关键信息缺失或响应为空即扣分

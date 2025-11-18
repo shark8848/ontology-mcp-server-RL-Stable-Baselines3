@@ -115,6 +115,79 @@ ontology-rl-commerce-agent/
 
 ## 🚀 快速开始
 
+### 方式 A：Docker 部署（推荐）
+
+**系统要求**:
+- Docker 20.10+
+- Docker Compose 2.0+
+- 8GB+ RAM
+- 磁盘：>20GB 可用空间
+
+**一键启动**:
+
+```bash
+# 1. 克隆仓库
+git clone <repository-url>
+cd ontology-mcp-server-RL-Stable-Baselines3
+
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env 文件，填入 LLM API Key
+nano .env  # 或使用其他编辑器
+
+# 3. 启动所有服务
+docker-compose up -d
+
+# 4. 查看日志
+docker-compose logs -f
+
+# 5. 停止服务
+docker-compose down
+```
+
+**服务访问**:
+- **MCP Server**: http://localhost:8000
+- **Agent UI**: http://localhost:7860
+- **Training Dashboard**: http://localhost:7861
+
+**常用命令**:
+```bash
+# 重启单个服务
+docker-compose restart agent-ui
+
+# 进入容器调试
+docker exec -it ontology-agent-ui bash
+
+# 查看服务状态
+docker-compose ps
+
+# 清理并重建（慎用）
+docker-compose down -v
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+**GPU 支持（可选）**:
+
+如需在 Docker 中使用 GPU 进行 RL 训练，需安装 `nvidia-docker` 并在 `docker-compose.yml` 中取消注释 GPU 配置段：
+
+```bash
+# 安装 nvidia-docker
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+sudo apt-get update && sudo apt-get install -y nvidia-docker2
+sudo systemctl restart docker
+
+# 启用 GPU（编辑 docker-compose.yml）
+# 取消注释 training-dashboard 服务的 deploy.resources 部分
+```
+
+---
+
+### 方式 B：本地开发部署
+
 ### 1. 环境准备
 
 **系统要求**:
@@ -140,6 +213,8 @@ pip install -e .
 ```
 
 ### 2. 初始化数据库
+
+> **注意**：Docker 部署会在首次启动时自动执行初始化，无需手动操作。以下步骤仅适用于本地开发部署。
 
 ```bash
 # 在虚拟环境中执行
@@ -1368,7 +1443,7 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 - [ ] 优化推荐算法（协同过滤）
 - [ ] 多语言支持（i18n）
 - [ ] 性能优化（缓存、并发）
-- [ ] Docker容器化部署
+- [x] Docker容器化部署
 
 **v2.0.0 (长期规划)**:
 - [ ] 多租户支持

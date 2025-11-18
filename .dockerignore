@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Virtual environments
 .venv/
@@ -37,6 +38,7 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
 
 # OS
 .DS_Store
@@ -52,9 +54,9 @@ src/agent/logs/
 src/ontology_mcp_server/logs/
 *.log
 
-# Docker
-.env
+# Git
+.git/
+.gitignore
 
-# Config (keep examples)
-src/agent/config.yaml
-config/training_dashboard.yaml
+# Docker
+.dockerignore

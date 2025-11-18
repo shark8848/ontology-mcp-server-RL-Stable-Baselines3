@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # MCP Server - 本体推理与电商业务服务
+  mcp-server:
+    build: .
+    container_name: ontology-mcp-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      - ONTOLOGY_DATA_DIR=/app/data
+      - ONTOLOGY_USE_OWLREADY2=false
+    command: uvicorn ontology_mcp_server.server:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ontology-net
+
+  # Agent UI - Gradio 对话界面
+  agent-ui:
+    build: .
+    container_name: ontology-agent-ui
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./src/agent:/app/src/agent
+    environment:
+      - ONTOLOGY_DATA_DIR=/app/data
+      - MCP_BASE_URL=http://mcp-server:8000
+      - OPENAI_API_URL=${OPENAI_API_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-deepseek-chat}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+    command: python -m agent.gradio_ui
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ontology-net
+
+  # Training Dashboard - RL 训练控制台
+  training-dashboard:
+    build: .
+    container_name: ontology-training-dashboard
+    ports:
+      - "7861:7861"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./src/training_dashboard:/app/src/training_dashboard
+    environment:
+      - ONTOLOGY_DATA_DIR=/app/data
+      - PYTHONPATH=/app/src
+    command: python scripts/run_training_dashboard.py
+    depends_on:
+      - mcp-server
+    restart: unless-stopped
+    networks:
+      - ontology-net
+    # 可选：GPU 支持（需要 nvidia-docker）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  ontology-net:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local

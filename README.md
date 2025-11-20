@@ -1469,19 +1469,113 @@ test_shacl_validation_detects_violations PASSED ✅
 
 ---
 
+## 🏷️ 版本发布
+
+### v1.5.0 (2025-11-20) - 当前版本 ✨
+
+**对应完成**: Phase 1-5 + RL 训练闭环 + Docker 部署
+
+**核心特性**:
+- ✅ Phase 1-3: 数据库 ORM + 本体推理 + 21 个 MCP 工具
+- ✅ Phase 4: Agent 对话优化（状态跟踪 + 质量评分 + 意图识别）
+- ✅ Phase 5: Gradio 5-Tab 可视化界面
+- ✅ Stable Baselines3 PPO 强化学习训练闭环
+- ✅ 训练控制台（语料管理 + 模型注册 + 实时日志）
+- ✅ Docker 容器化部署支持（多阶段构建 + Compose 编排）
+- ✅ ChromaDB 对话记忆系统
+
+**下载方式**:
+
+```bash
+# 克隆特定版本
+git clone --branch v1.5.0 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+
+# 或下载 Release 压缩包
+wget https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3/archive/refs/tags/v1.5.0.tar.gz
+
+# 克隆最新开发版
+git clone https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+```
+
+**Docker 快速启动**:
+```bash
+# 使用 Release 版本
+git checkout v1.5.0
+cp .env.example .env
+# 编辑 .env 填入 API Key
+docker-compose up -d
+```
+
+**变更内容**: 详见 [更新日志](#-更新日志)
+
+---
+
+### 历史版本
+
+<details>
+<summary><b>v1.0.0 (2025-10)</b> - Phase 1-3 基础版本</summary>
+
+**完成内容**:
+- ✅ Phase 1: 数据库 ORM 层（12 表 + SQLAlchemy）
+- ✅ Phase 2: 电商本体层（650 行本体 + 550 行 SHACL）
+- ✅ Phase 3: MCP 工具层（21 个工具）
+- ✅ 基础 ReAct Agent
+
+**下载**:
+```bash
+git clone --branch v1.0.0 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+```
+</details>
+
+<details>
+<summary><b>v1.2.0 (2025-11 早期)</b> - Phase 4 对话优化</summary>
+
+**完成内容**:
+- ✅ Phase 4: Agent 对话优化
+  - 系统提示词管理
+  - 8 阶段对话状态跟踪
+  - 质量评分系统
+  - 意图识别追踪
+  - 个性化推荐引擎
+- ✅ ChromaDB 记忆系统
+
+**下载**:
+```bash
+git clone --branch v1.2.0 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+```
+</details>
+
+<details>
+<summary><b>v1.3.0 (2025-11 中期)</b> - Phase 5 可视化</summary>
+
+**完成内容**:
+- ✅ Phase 5: Gradio 电商 UI
+  - 5 Tab 可视化界面
+  - 实时分析面板
+  - 工具调用追踪
+  - 对话记忆管理
+
+**下载**:
+```bash
+git clone --branch v1.3.0 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+```
+</details>
+
+---
+
 ### 版本规划路线图
 
-**v1.3.0 (计划中)**:
-- [ ] 持久化用户上下文（JSON文件保存/加载）
-- [ ] 扩展提取字段（用户姓名、VIP状态、收货人）
+**v1.6.0 (计划中)**:
+- [ ] 持久化用户上下文（JSON 文件保存/加载）
+- [ ] 扩展提取字段（用户姓名、VIP 状态、收货人）
 - [ ] 多地址支持（家庭地址、公司地址）
 - [ ] 上下文统计仪表板
 
-**v1.4.0 (计划中)**:
+**v1.7.0 (计划中)**:
 - [ ] 优化推荐算法（协同过滤）
 - [ ] 多语言支持（i18n）
 - [ ] 性能优化（缓存、并发）
-- [x] Docker容器化部署
+- [ ] 增强 RL 奖励函数
 
 **v2.0.0 (长期规划)**:
 - [ ] 多租户支持

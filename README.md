@@ -1068,162 +1068,6 @@ SQLite 数据库 (`data/ecommerce.db`) 包含 12 张表：
 → "作为 VIP 会员，订单满 1000 元享受 8 折优惠"
 ```
 
-## 🔄 最新优化（2025-11）
-
-### 优化1: 订单创建前自动 SHACL 校验
-
-在 `commerce_service.py` 的 `create_order()` 方法中集成了自动数据校验：
-
-```python
-# 订单创建前自动校验
-order_rdf = self._build_order_rdf(user_id, order_amount, discount_rate, items)
-conforms, report = validate_order(order_rdf, fmt="turtle")
-
-if not conforms:
-    LOGGER.error("订单数据 SHACL 校验失败，拒绝创建订单")
-    raise ValueError(f"订单数据不符合本体约束规则: {report[:500]}")
-
-LOGGER.info("订单数据 SHACL 校验通过，继续创建订单")
-```
-
-**优势**:
-- ✅ 自动验证数据完整性，防止无效订单
-- ✅ 在数据库操作前拦截错误，提高系统健壮性
-- ✅ 提供详细的违规报告，便于问题定位
-
-### 优化2: SHACL 校验日志详细化
-
-增强 `shacl_service.py` 的日志输出，提供更多诊断信息：
-
-```python
-# 优化前
-logger.info("SHACL 校验结果 conforms=%s", conforms)
-
-# 优化后
-if conforms:
-    logger.info("✅ SHACL 校验通过: conforms=True, data_triples=%d", data_triples_count)
-else:
-    logger.warning("❌ SHACL 校验失败: conforms=False, violations=%d, data_triples=%d", 
-                  violations_count, data_triples_count)
-    for i, msg in enumerate(violation_messages[:5], 1):
-        logger.warning("  违规项 #%d: %s", i, msg)
-```
-
-**新增信息**:
-- 📊 数据三元组数量统计
-- 🔢 违规项数量统计
-- 📝 前5条违规消息详情
-- ✅/❌ 可视化状态标识
-
-**实际输出示例**:
-```
-✅ SHACL 校验通过: conforms=True, data_triples=9
-❌ SHACL 校验失败: conforms=False, violations=2, data_triples=5
-  违规项 #1: totalAmount must be a non-negative decimal
-  违规项 #2: Order must have at least one item
-```
-
-### 优化3: Agent 提示词增强
-
-更新 `prompts.py` 系统提示词，引导 Agent 正确使用本体工具：
-
-**新增内容**:
-- **可用工具说明**: 详细列出本体推理工具及其用途
-- **数据校验规则**: 强调在关键业务操作前使用校验工具
-- **使用场景指导**: 提供具体的工具使用建议
-
-**关键改进**:
-```
-本体推理工具：
-  * ontology_explain_discount - 解释折扣规则，展示推理过程
-  * ontology_normalize_product - 商品名称规范化（处理同义词）
-  * ontology_validate_order - 订单数据校验（创建订单前验证数据完整性）
-
-数据校验规则：
-- 创建订单前，使用 ontology_validate_order 验证订单数据结构
-- 商品名称不确定时，使用 ontology_normalize_product 标准化
-- 需要向用户解释折扣策略时，使用 ontology_explain_discount 展示推理依据
-```
-
-**改进点**:
-- 📖 明确说明本体工具的用途
-- 🎯 强调数据校验的重要性
-- 💡 提供具体使用场景指导
-
-### 优化4: 完善退换货规则
-
-为 `infer_return_policy()` 添加包装完好性检查参数，实现 100% 规则覆盖：
-
-```python
-def infer_return_policy(
-    self, 
-    user_level: str, 
-    product_category: str,
-    is_activated: bool = False,
-    packaging_intact: bool = True  # 新增参数
-) -> Dict[str, Any]:
-    """推理退换货政策"""
-    
-    # ... 其他逻辑
-    
-    # 配件类商品条件
-    elif product_category == "配件":
-        if packaging_intact:
-            conditions.append("包装需保持完好")
-            reasons.append("配件类商品包装完好可退货")
-        else:
-            returnable = False
-            return_period_days = 0
-            reasons.append("配件类商品包装已拆封，不可退货")
-```
-
-**测试验证**:
-```python
-# 包装完好
-result = infer_return_policy(user_level="Regular", product_category="配件", 
-                             packaging_intact=True)
-# 输出: {'returnable': True, 'return_period_days': 7, ...}
-
-# 包装已拆
-result = infer_return_policy(user_level="Regular", product_category="配件", 
-                             packaging_intact=False)
-# 输出: {'returnable': False, 'return_period_days': 0, ...}
-```
-
-### 优化成果总结
-
-| 优化项 | 优化前 | 优化后 | 改进效果 |
-|-------|--------|--------|---------|
-| 订单数据校验 | 手动校验 | 自动 SHACL 校验 | 🚀 100% 自动拦截无效订单 |
-| 校验日志 | 简单状态 | 详细违规信息 | 📊 问题定位速度提升 80% |
-| Agent 引导 | 通用说明 | 场景化指导 | 🎯 工具使用正确率提升 60% |
-| 规则覆盖 | 97.4% | 100% | ✅ 全部19条规则完整实现 |
-
-### 性能与测试指标
-
-**单元测试覆盖**:
-```bash
-$ pytest tests/test_services.py -v
-================================
-test_explain_discount_infers_rule PASSED      ✅
-test_normalize_product_uses_synonyms PASSED   ✅
-test_shacl_validation_detects_violations PASSED ✅
-================================
-3 passed in 0.07s
-```
-
-**推理性能基准**:
-- 用户等级推理: < 1ms
-- 折扣计算推理: < 2ms
-- 物流策略推理: < 2ms
-- 退换货规则推理: < 2ms
-- SHACL 校验: < 10ms (包含 RDF 解析)
-
-**数据质量保证**:
-- 订单数据完整性: 100% 验证
-- 本体约束符合率: 100%
-- 推理准确率: 100% (基于确定性规则)
-
 ## 🔮 未来规划
 
 ### 短期目标
@@ -1456,6 +1300,23 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 
 ## 📝 更新日志
 
+### 2025-11-20
+
+**🎯 训练环境增强**
+- ✨ 新增 `--device` 参数支持 GPU/CPU 训练策略选择，默认 GPU（自动回退 CPU）
+- 📚 完善 README 训练章节，补充环境变量配置说明（`MCP_BASE_URL`、`OPENAI_API_KEY` 等）
+- 🔧 更新 `.env.example` 新增 `MCP_BASE_URL` 配置项
+- 📖 新增"3.1 配置 MCP 服务地址"章节，说明训练/Agent 如何访问 MCP Server
+
+**🔧 依赖与配置优化**
+- ➕ 将 `gradio>=4.0.0` 及相关 UI 依赖添加到 `pyproject.toml` 主依赖列表
+- 🗑️ 移除项目 URL 配置，避免与旧版仓库混淆
+
+**技术细节**：
+- `train_rl_agent.py` 新增 `_resolve_device()` 辅助函数，支持 `torch.cuda.is_available()` 检测
+- `PPOTrainer` 构造器新增 `device` 参数，透传至 Stable Baselines3 PPO 模型
+- README 训练示例命令增加 `export MCP_BASE_URL` 和 `--device` 标志完整演示
+
 ### 2025-11-19
 
 **🎨 训练控制台完善**
@@ -1475,22 +1336,156 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 - ✅ 刷新目录结构，补充 `training_dashboard/` 模块说明
 - 🔧 新增 `.env.example` 模板与 `.dockerignore` 配置
 
-### 2025-11-20
+### 2025-11（本体优化）
 
-**🎯 训练环境增强**
-- ✨ 新增 `--device` 参数支持 GPU/CPU 训练策略选择，默认 GPU（自动回退 CPU）
-- 📚 完善 README 训练章节，补充环境变量配置说明（`MCP_BASE_URL`、`OPENAI_API_KEY` 等）
-- 🔧 更新 `.env.example` 新增 `MCP_BASE_URL` 配置项
-- 📖 新增"3.1 配置 MCP 服务地址"章节，说明训练/Agent 如何访问 MCP Server
+**🔄 订单创建前自动 SHACL 校验**
 
-**🔧 依赖与配置优化**
-- ➕ 将 `gradio>=4.0.0` 及相关 UI 依赖添加到 `pyproject.toml` 主依赖列表
-- 🗑️ 移除项目 URL 配置，避免与旧版仓库混淆
+在 `commerce_service.py` 的 `create_order()` 方法中集成了自动数据校验：
 
-**技术细节**：
-- `train_rl_agent.py` 新增 `_resolve_device()` 辅助函数，支持 `torch.cuda.is_available()` 检测
-- `PPOTrainer` 构造器新增 `device` 参数，透传至 Stable Baselines3 PPO 模型
-- README 训练示例命令增加 `export MCP_BASE_URL` 和 `--device` 标志完整演示
+```python
+# 订单创建前自动校验
+order_rdf = self._build_order_rdf(user_id, order_amount, discount_rate, items)
+conforms, report = validate_order(order_rdf, fmt="turtle")
+
+if not conforms:
+    LOGGER.error("订单数据 SHACL 校验失败，拒绝创建订单")
+    raise ValueError(f"订单数据不符合本体约束规则: {report[:500]}")
+
+LOGGER.info("订单数据 SHACL 校验通过，继续创建订单")
+```
+
+**优势**:
+- ✅ 自动验证数据完整性，防止无效订单
+- ✅ 在数据库操作前拦截错误，提高系统健壮性
+- ✅ 提供详细的违规报告，便于问题定位
+
+**🔄 SHACL 校验日志详细化**
+
+增强 `shacl_service.py` 的日志输出，提供更多诊断信息：
+
+```python
+# 优化前
+logger.info("SHACL 校验结果 conforms=%s", conforms)
+
+# 优化后
+if conforms:
+    logger.info("✅ SHACL 校验通过: conforms=True, data_triples=%d", data_triples_count)
+else:
+    logger.warning("❌ SHACL 校验失败: conforms=False, violations=%d, data_triples=%d", 
+                  violations_count, data_triples_count)
+    for i, msg in enumerate(violation_messages[:5], 1):
+        logger.warning("  违规项 #%d: %s", i, msg)
+```
+
+**新增信息**:
+- 📊 数据三元组数量统计
+- 🔢 违规项数量统计
+- 📝 前5条违规消息详情
+- ✅/❌ 可视化状态标识
+
+**实际输出示例**:
+```
+✅ SHACL 校验通过: conforms=True, data_triples=9
+❌ SHACL 校验失败: conforms=False, violations=2, data_triples=5
+  违规项 #1: totalAmount must be a non-negative decimal
+  违规项 #2: Order must have at least one item
+```
+
+**🔄 Agent 提示词增强**
+
+更新 `prompts.py` 系统提示词，引导 Agent 正确使用本体工具：
+
+**新增内容**:
+- **可用工具说明**: 详细列出本体推理工具及其用途
+- **数据校验规则**: 强调在关键业务操作前使用校验工具
+- **使用场景指导**: 提供具体的工具使用建议
+
+**关键改进**:
+```
+本体推理工具：
+  * ontology_explain_discount - 解释折扣规则，展示推理过程
+  * ontology_normalize_product - 商品名称规范化（处理同义词）
+  * ontology_validate_order - 订单数据校验（创建订单前验证数据完整性）
+
+数据校验规则：
+- 创建订单前，使用 ontology_validate_order 验证订单数据结构
+- 商品名称不确定时，使用 ontology_normalize_product 标准化
+- 需要向用户解释折扣策略时，使用 ontology_explain_discount 展示推理依据
+```
+
+**改进点**:
+- 📖 明确说明本体工具的用途
+- 🎯 强调数据校验的重要性
+- 💡 提供具体使用场景指导
+
+**🔄 完善退换货规则**
+
+为 `infer_return_policy()` 添加包装完好性检查参数，实现 100% 规则覆盖：
+
+```python
+def infer_return_policy(
+    self, 
+    user_level: str, 
+    product_category: str,
+    is_activated: bool = False,
+    packaging_intact: bool = True  # 新增参数
+) -> Dict[str, Any]:
+    """推理退换货政策"""
+    
+    # ... 其他逻辑
+    
+    # 配件类商品条件
+    elif product_category == "配件":
+        if packaging_intact:
+            conditions.append("包装需保持完好")
+            reasons.append("配件类商品包装完好可退货")
+        else:
+            returnable = False
+            return_period_days = 0
+            reasons.append("配件类商品包装已拆封，不可退货")
+```
+
+**测试验证**:
+```python
+# 包装完好
+result = infer_return_policy(user_level="Regular", product_category="配件", 
+                             packaging_intact=True)
+# 输出: {'returnable': True, 'return_period_days': 7, ...}
+
+# 包装已拆
+result = infer_return_policy(user_level="Regular", product_category="配件", 
+                             packaging_intact=False)
+# 输出: {'returnable': False, 'return_period_days': 0, ...}
+```
+
+**📊 优化成果总结**
+
+| 优化项 | 优化前 | 优化后 | 改进效果 |
+|-------|--------|--------|------|
+| 订单数据校验 | 手动校验 | 自动 SHACL 校验 | 🚀 100% 自动拦截无效订单 |
+| 校验日志 | 简单状态 | 详细违规信息 | 📊 问题定位速度提升 80% |
+| Agent 引导 | 通用说明 | 场景化指导 | 🎯 工具使用正确率提升 60% |
+| 规则覆盖 | 97.4% | 100% | ✅ 全部19条规则完整实现 |
+
+**⚡ 性能与测试指标**
+
+**单元测试覆盖**:
+```bash
+$ pytest tests/test_services.py -v
+================================
+test_explain_discount_infers_rule PASSED      ✅
+test_normalize_product_uses_synonyms PASSED   ✅
+test_shacl_validation_detects_violations PASSED ✅
+================================
+3 passed in 0.07s
+```
+
+**推理性能基准**:
+- 用户等级推理: < 1ms
+- 折扣计算推理: < 2ms
+- 物流策略推理: < 2ms
+- 退换货规则推理: < 2ms
+- SHACL 校验: < 10ms (包含 RDF 解析)
 
 ---
 

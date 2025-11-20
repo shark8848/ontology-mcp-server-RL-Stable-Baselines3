@@ -10,11 +10,23 @@ import sys
 import os
 import argparse
 
+import torch
+
 # 添加项目路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from agent.react_agent import LangChainAgent
 from agent.rl_agent.ppo_trainer import PPOTrainer
+
+
+def _resolve_device(preference: str) -> str:
+    """Resolve device string based on user preference and availability."""
+    if preference == "gpu":
+        if torch.cuda.is_available():
+            return "cuda"
+        print("⚠️ 未检测到可用 GPU，自动回退到 CPU")
+        return "cpu"
+    return "cpu"
 
 
 def main():
@@ -60,8 +72,16 @@ def main():
         default=None,
         help="指定训练场景 JSON 文件，默认使用内置示例语料"
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        choices=["gpu", "cpu"],
+        default="gpu",
+        help="选择训练计算策略，默认为 GPU"
+    )
     
     args = parser.parse_args()
+    device = _resolve_device(args.device)
     
     print("="*60)
     print("电商 AI 助手 - 强化学习训练")
@@ -71,6 +91,7 @@ def main():
     print(f"检查点频率: {args.checkpoint_freq}")
     print(f"输出目录: {args.output_dir}")
     print(f"文本嵌入: {args.use_text_embedding}")
+    print(f"计算设备: {device}")
     if args.scenario_file:
         print(f"训练语料: {args.scenario_file}")
     print("="*60)
@@ -93,6 +114,7 @@ def main():
         output_dir=args.output_dir,
         use_text_embedding=args.use_text_embedding,
         scenario_file=args.scenario_file,
+        device=device,
     )
     print("✓ 训练器创建成功")
     

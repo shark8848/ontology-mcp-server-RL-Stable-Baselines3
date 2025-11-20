@@ -88,12 +88,14 @@ class PPOTrainer:
         use_text_embedding: bool = False,
         reward_weights: Optional[Dict[str, float]] = None,
         scenario_file: Optional[str] = None,
+        device: str = "cuda",
     ):
         """初始化训练器"""
         self.agent = agent
         self.output_dir = output_dir
         self.use_text_embedding = use_text_embedding
         self.reward_weights = reward_weights
+        self.device = device
         default_scenario = os.path.join("data", "training_scenarios", "sample_dialogues.json")
         self.scenario_file = scenario_file or default_scenario
         self.scenario_scripts = load_scenario_scripts(self.scenario_file)
@@ -155,6 +157,7 @@ class PPOTrainer:
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
         policy_kwargs: Optional[Dict[str, Any]] = None,
+        device: Optional[str] = None,
     ) -> PPO:
         """
         创建 PPO 模型
@@ -184,6 +187,8 @@ class PPOTrainer:
                 "net_arch": [dict(pi=[128, 128], vf=[128, 128])],  # 策略和价值网络结构
             }
         
+        target_device = device or self.device
+
         self.model = PPO(
             policy="MlpPolicy",  # 多层感知机策略
             env=self.env,
@@ -200,6 +205,7 @@ class PPOTrainer:
             policy_kwargs=policy_kwargs,
             verbose=1,
             tensorboard_log=os.path.join(self.log_dir, "tensorboard"),
+            device=target_device,
         )
         
         return self.model

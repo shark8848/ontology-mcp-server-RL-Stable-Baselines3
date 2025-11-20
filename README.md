@@ -13,7 +13,7 @@
 - **💬 智能对话**：基于 LangChain 的 ReAct Agent，支持多轮对话、上下文理解、状态跟踪
 - **🧩 记忆系统**：ChromaDB 驱动的对话记忆，支持历史回溯和语义检索
 - **📊 可视化 UI**：Gradio 界面展示对话、工具调用、状态跟踪、质量分析
-- **🧠 强化学习闭环**：`scripts/generate_dialogue_corpus.py` + `train_rl_agent.py` 构建 220 条高质量语料、Stable Baselines3 PPO 训练、TensorBoard 评估与 Agent 推理联调，实现 0→1 自动演进
+- **🧠 强化学习闭环**：`scripts/generate_dialogue_corpus.py` + `train_rl_agent.py` 将 200 条“100% 真实订单/商品/用户”语料注入 Stable Baselines3 PPO 训练、TensorBoard 评估与 Agent 推理联调，实现 0→1 自动演进
 
 ### Phase 完成状态
 
@@ -40,7 +40,7 @@ ontology-rl-commerce-agent/
 │   ├── add_bulk_products.py  # 生成 1000+ 商品
 │   ├── add_bulk_users.py     # 生成 200+ 用户
 │   ├── update_demo_user_names.py # 刷新 Demo 用户信息
-│   └── generate_dialogue_corpus.py # 生成 220 条 RL 语料
+│   └── generate_dialogue_corpus.py # 生成 200 条全真实 RL 语料
 │
 ├── data/                     # 数据资产
 │   ├── ontology_commerce.ttl # 650 行电商领域本体
@@ -398,7 +398,7 @@ AI: [调用 commerce.add_to_cart] 已添加... (状态: browsing → cart)
 ```
 
 ### 7. （可选）启用强化学习闭环
-- 使用 `scripts/generate_dialogue_corpus.py` 生成最新对话语料（220 条，65% 真实数据）
+- 使用 `scripts/generate_dialogue_corpus.py` 生成最新对话语料（200 条，全部来源于真实订单/商品/用户）
 - 执行 `python test_rl_modules.py` 确认环境
 - 运行 `python train_rl_agent.py --timesteps ...` 启动 PPO 训练
 - 训练及部署方法详见下文“🧠 强化学习自进化 (Phase 6)”章节
@@ -538,7 +538,7 @@ curl -X POST http://localhost:8000/invoke \
 
 **示例对话脚本 + 用户模拟**
 
-- `data/training_scenarios/sample_dialogues.json`：220 组对话（65% 真实用户/手机号/订单号 + 35% 合成 persona），按 `transaction_success / consultation / issue / customer_service / return` 5 类场景分布。训练时脚本逐步注入真实购物话术，完全复用数据库中的 1000+ 商品与 200 名用户。
+- `data/training_scenarios/sample_dialogues.json`：200 组对话（100% 引用真实用户手机号、真实订单号与真实商品），按 `transaction_success / consultation / issue / customer_service / return` 5 类场景分布，并将真实订单金额、物流地址、支付状态写入 `metadata.order`，训练时可直接对接 1000+ 商品与 200 名用户。
 
 ### 端到端 0→1 闭环：数据 → 训练 → 应用
 
@@ -551,11 +551,11 @@ curl -X POST http://localhost:8000/invoke \
   python scripts/add_bulk_users.py
   python scripts/update_demo_user_names.py --seed 2025
   ```
-2. **生成 220 条语料（65% 真实数据）**：
+2. **生成 200 条全真实语料**：
   ```bash
   python scripts/generate_dialogue_corpus.py
   ```
-  输出位于 `data/training_scenarios/sample_dialogues.json`，`summary.real_ratio=0.65`、`summary.categories` 会自动给出配额。如需自定义数量/比例，可调整脚本顶部常量再运行。
+  输出位于 `data/training_scenarios/sample_dialogues.json`，`summary.categories` 会自动给出配额。如需自定义数量，可调整脚本顶部常量再运行；脚本默认只采样真实数据库用户/订单/商品，不再生成虚构 persona。
 3. **快速校验语料**（可选）：
   ```bash
   python - <<'PY'
@@ -563,7 +563,6 @@ curl -X POST http://localhost:8000/invoke \
   from collections import Counter
   data=json.load(open('data/training_scenarios/sample_dialogues.json'))
   print('total', len(data['scenarios']))
-  print('real_ratio', data['summary']['real_ratio'])
   print('categories', Counter(s['category'] for s in data['scenarios']))
   PY
   ```
@@ -1296,6 +1295,12 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 - `train_rl_agent.py` 新增 `_resolve_device()` 辅助函数，支持 `torch.cuda.is_available()` 检测
 - `PPOTrainer` 构造器新增 `device` 参数，透传至 Stable Baselines3 PPO 模型
 - README 训练示例命令增加 `export MCP_BASE_URL` 和 `--device` 标志完整演示
+
+**📔 真实语料升级**
+- ♻️ 重写 `scripts/generate_dialogue_corpus.py`，统一从 SQLite 中抽取真实用户、订单、商品，并写入完整 `metadata.order` 结构
+- 🧾 语料量固定为 200 条，按 80/40/30/30/20 五类场景配额，所有对话都携带真实订单号、金额、物流地址与联系方式
+- 📁 `data/training_scenarios/sample_dialogues.json` 的 `summary` 结构升级，仅保留分类统计，方便快速对齐训练目标
+- 📚 README 相关章节同步更新，明确语料构成与校验方式
 
 ### 2025-11-19
 

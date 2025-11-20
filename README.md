@@ -1456,24 +1456,7 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 
 ## 📝 更新日志
 
-### 2025-11-20（今日更新）
-
-**🎯 训练环境增强**
-- ✨ 新增 `--device` 参数支持 GPU/CPU 训练策略选择，默认 GPU（自动回退 CPU）
-- 📚 完善 README 训练章节，补充环境变量配置说明（`MCP_BASE_URL`、`OPENAI_API_KEY` 等）
-- 🔧 更新 `.env.example` 新增 `MCP_BASE_URL` 配置项
-- 📖 新增"3.1 配置 MCP 服务地址"章节，说明训练/Agent 如何访问 MCP Server
-
-**🔧 依赖与配置优化**
-- ➕ 将 `gradio>=4.0.0` 及相关 UI 依赖添加到 `pyproject.toml` 主依赖列表
-- 🗑️ 移除项目 URL 配置，避免与旧版仓库混淆
-
-**技术细节**：
-- `train_rl_agent.py` 新增 `_resolve_device()` 辅助函数，支持 `torch.cuda.is_available()` 检测
-- `PPOTrainer` 构造器新增 `device` 参数，透传至 Stable Baselines3 PPO 模型
-- README 训练示例命令增加 `export MCP_BASE_URL` 和 `--device` 标志完整演示
-
-### 2025-11-19（昨日更新）
+### 2025-11-19
 
 **🎨 训练控制台完善**
 - 🚀 完成 Gradio 训练控制台 4 个 Tab：概览、语料管理、训练控制、模型管理
@@ -1491,6 +1474,23 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 - ✅ 更新 README 新增"方式 A: Docker 部署"章节
 - ✅ 刷新目录结构，补充 `training_dashboard/` 模块说明
 - 🔧 新增 `.env.example` 模板与 `.dockerignore` 配置
+
+### 2025-11-20
+
+**🎯 训练环境增强**
+- ✨ 新增 `--device` 参数支持 GPU/CPU 训练策略选择，默认 GPU（自动回退 CPU）
+- 📚 完善 README 训练章节，补充环境变量配置说明（`MCP_BASE_URL`、`OPENAI_API_KEY` 等）
+- 🔧 更新 `.env.example` 新增 `MCP_BASE_URL` 配置项
+- 📖 新增"3.1 配置 MCP 服务地址"章节，说明训练/Agent 如何访问 MCP Server
+
+**🔧 依赖与配置优化**
+- ➕ 将 `gradio>=4.0.0` 及相关 UI 依赖添加到 `pyproject.toml` 主依赖列表
+- 🗑️ 移除项目 URL 配置，避免与旧版仓库混淆
+
+**技术细节**：
+- `train_rl_agent.py` 新增 `_resolve_device()` 辅助函数，支持 `torch.cuda.is_available()` 检测
+- `PPOTrainer` 构造器新增 `device` 参数，透传至 Stable Baselines3 PPO 模型
+- README 训练示例命令增加 `export MCP_BASE_URL` 和 `--device` 标志完整演示
 
 ---
 

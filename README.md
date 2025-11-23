@@ -1133,6 +1133,16 @@ SQLite 数据库 (`data/ecommerce.db`) 包含 12 张表：
 
 ## � 版本迭代历史
 
+### v1.5.1 (2025-11-23) - 当前版本 ✨
+
+**核心亮点**:
+- ✅ 聊天窗口原生图表：Plotly 图以 Markdown + Base64 PNG 形式嵌入对话流，附带意图/用户上下文 metadata 及 `_filter_charts_by_intent()` 审查
+- ✅ Analytics & MCP：新增 `analytics_service.py` 五种数据接口与 `analytics_get_chart_data` 工具（第 22 个 MCP 能力），任何部署路径都能稳定读取电商指标
+- ✅ 依赖对齐与诊断：`pyproject.toml`、`requirements-dev.txt` 锁定 `plotly>=6.1.0,<7.0.0` + `kaleido==0.2.1`，并提供 `verify_chart_fix.py`、`test_chart_feature.py` 等脚本配合日志/记忆备份快速排障
+- ✅ 控制台体验：语料管理页支持点选预览 + JSON 同步渲染，脚本启动日志展示监听 Host/Port，方便多实例排查
+
+**变更内容**: 详见 [更新日志](#-更新日志)
+
 ### v1.2.3 (2025-11-15) - 项目更名与框架致谢
 
 **主要更新**:
@@ -1221,38 +1231,11 @@ SQLite 数据库 (`data/ecommerce.db`) 包含 12 张表：
 - `src/agent/user_context_extractor.py`: 新增 `UserContextExtractor.is_valid_order_id()` 与 `UserContextManager.set_recent_order()`
 - `src/agent/chroma_memory.py`: 在 `add_turn()` 中检测 `create_order` 并显式调用 `set_recent_order()`
 
----
-
 
 **用户体验**:
 - 一键触发复杂推理场景
-### v1.5.1 (2025-11-23) - 当前版本 ✨
 
-**核心亮点**:
-- ✅ 聊天窗口原生图表：Chart tab 完全下线，Plotly 图以 Markdown + Base64 PNG 形式嵌入对话流，附带意图/用户上下文 metadata 及 `_filter_charts_by_intent()` 审查
-- ✅ Analytics & MCP：新增 `analytics_service.py` 五种数据接口与 `analytics_get_chart_data` 工具（第 22 个 MCP 能力），任何部署路径都能稳定读取电商指标
-- ✅ 依赖对齐与诊断：`pyproject.toml`、`requirements-dev.txt` 锁定 `plotly>=6.1.0,<7.0.0` + `kaleido==0.2.1`，并提供 `verify_chart_fix.py`、`test_chart_feature.py` 等脚本配合日志/记忆备份快速排障
-- ✅ 控制台体验：语料管理页支持点选预览 + JSON 同步渲染，脚本启动日志展示监听 Host/Port，方便多实例排查
 
-**下载方式**:
-
-```bash
-# 克隆 v1.5.1 稳定版
-**新增功能**:
-
-# 或下载 Release 压缩包
-wget https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3/archive/refs/tags/v1.5.1.tar.gz
-
-# 克隆最新开发版
-- ✨ **订单创建前自动SHACL校验**: 在 `commerce_service.py` 集成数据校验
-```
-
-**部署提示**:
-- `git checkout v1.5.1 && cp .env.example .env` 后再运行 `docker-compose up -d`
-- 首次启动后执行 `python -m agent.gradio_ui` 可验证 Plotly/Kaleido 组合是否正常输出 Base64 图
-- 可选运行 `python verify_chart_fix.py` 进行冒烟测试
-
-**变更内容**: 详见 [更新日志](#-更新日志)
 
 ---
 - 📊 **SHACL日志详细化**: 显示三元组数量、违规项数量、详细错误信息
@@ -1577,46 +1560,55 @@ test_shacl_validation_detects_violations PASSED ✅
 
 ## 🏷️ 版本发布
 
-### v1.5.0 (2025-11-20) - 当前版本 ✨
+### v1.5.1 (2025-11-23) - 当前版本 ✨
 
-**对应完成**: Phase 1-5 + RL 训练闭环 + Docker 部署
-
-**核心特性**:
-- ✅ Phase 1-3: 数据库 ORM + 本体推理 + 21 个 MCP 工具
-- ✅ Phase 4: Agent 对话优化（状态跟踪 + 质量评分 + 意图识别）
-- ✅ Phase 5: Gradio 5-Tab 可视化界面
-- ✅ Stable Baselines3 PPO 强化学习训练闭环
-- ✅ 训练控制台（语料管理 + 模型注册 + 实时日志）
-- ✅ Docker 容器化部署支持（多阶段构建 + Compose 编排）
-- ✅ ChromaDB 对话记忆系统
+**核心亮点**:
+- 💬 Charts Tab 下线，Plotly 图以 Markdown + Base64 PNG 原生嵌入对话流，`react_agent.py` / `gradio_ui.py` 注入意图、用户上下文、requested_user_id 并由 `_filter_charts_by_intent()` 自动屏蔽含个人信息的图表
+- 📊 `analytics_service.py` 提供 5 类图表数据接口并修复数据库路径解析，新 `analytics_get_chart_data` MCP 工具让任意部署路径都能稳定获取订单/用户指标
+- 🧱 依赖对齐：`pyproject.toml` 与 `requirements-dev.txt` 统一锁定 `plotly>=6.1.0,<7.0.0` + `kaleido==0.2.1`，搭配 `verify_chart_fix.py`、`test_chart_feature.py` 等脚本 + `logs/` / `data/chroma_memory_backup_*` 便捷诊断
+- 📋 训练控制台体验升级：语料管理 Tab 支持点击行预览 + JSON 同步渲染，`run_agent.sh` / `run_training_dashboard.sh` 新增 Host/Port 显示，便于多实例排查
 
 **下载方式**:
 
 ```bash
-# 克隆特定版本
-git clone --branch v1.5.0 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+# 克隆 v1.5.1 稳定版
+git clone --branch v1.5.1 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
 
 # 或下载 Release 压缩包
-wget https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3/archive/refs/tags/v1.5.0.tar.gz
+wget https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3/archive/refs/tags/v1.5.1.tar.gz
 
 # 克隆最新开发版
 git clone https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
 ```
 
-**Docker 快速启动**:
-```bash
-# 使用 Release 版本
-git checkout v1.5.0
-cp .env.example .env
-# 编辑 .env 填入 API Key
-docker-compose up -d
-```
+**部署提示**:
+- `git checkout v1.5.1 && cp .env.example .env` 后执行 `docker-compose up -d`
+- 启动后可运行 `python -m agent.gradio_ui` 验证 Base64 图渲染，再用 `python verify_chart_fix.py` 快速冒烟
+- Plotly/Kaleido 组合依赖 Kaleido 0.2.1（无需 Chrome），若自定义环境请手动确认
 
 **变更内容**: 详见 [更新日志](#-更新日志)
 
 ---
 
 ### 历史版本
+
+<details>
+<summary><b>v1.5.0 (2025-11-20)</b> - RL 闭环与 Docker 首发</summary>
+
+**特性速览**:
+- Phase 1-5 全量能力（数据库、本体、21 个 MCP 工具、Gradio 5 Tabs）
+- Stable Baselines3 PPO 闭环训练、训练控制台（语料管理 + 模型注册 + 实时日志）
+- Docker 多阶段镜像 + Compose 编排脚本
+- ChromaDB 对话记忆体系
+
+**获取方式**:
+```bash
+git clone --branch v1.5.0 https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.git
+# 或
+wget https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3/archive/refs/tags/v1.5.0.tar.gz
+```
+
+</details>
 
 <details>
 <summary><b>v1.0.0 (2025-10)</b> - Phase 1-3 基础版本</summary>

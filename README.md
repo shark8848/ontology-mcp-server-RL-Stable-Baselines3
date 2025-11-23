@@ -4,26 +4,43 @@
 
 🤖 **强化学习驱动的 Agent**：项目内置 Stable Baselines3 PPO 训练管线，从 **数据 → 训练 → 评估 → 部署** 完整闭环出发，支持 Agent 在真实语料与工具调用日志上持续自我迭代，自动学会更高效、更安全的工具编排策略。
 
-## 🎯 项目特性
+### 4. 启动服务
 
-### 核心能力
+**方式一：一键后台启动（推荐）**
 
-- **🧠 本体推理**：基于 `ontology_commerce.ttl` 提供折扣规则解释、商品归一化、订单校验等语义推理
-- **🛒 完整电商功能**：21 个工具覆盖搜索、购物车、订单、支付、物流、售后全流程
-- **💬 智能对话**：基于 LangChain 的 ReAct Agent，支持多轮对话、上下文理解、状态跟踪
-- **🧩 记忆系统**：ChromaDB 驱动的对话记忆，支持历史回溯和语义检索
-- **📊 可视化 UI**：Gradio 界面展示对话、工具调用、状态跟踪、质量分析
-- **🧠 强化学习闭环**：`scripts/generate_dialogue_corpus.py` + `train_rl_agent.py` 将 200 条“100% 真实订单/商品/用户”语料注入 Stable Baselines3 PPO 训练、TensorBoard 评估与 Agent 推理联调，实现 0→1 自动演进
+```bash
+# 后台启动 Server / Agent / Training Dashboard / TensorBoard
+./scripts/start_all.sh
 
-### Phase 完成状态
+# 实时查看任一服务日志
+tail -f logs/server_*.log
+```
 
+- 所有脚本采用 `nohup` + 后台模式运行，并将输出写入 `logs/<service>_yyyyMMdd_HHmmss>.log`。
+- `LOG_DIR` 环境变量可自定义日志目录（默认 `logs/`）。
+- 进程信息会记录在 `logs/processes.pid`，便于统一停止。
+- 一键停止全部服务：
+
+```bash
+./scripts/stop_all.sh
+```
+
+`stop_all.sh` 会遍历 `processes.pid` 中的 PID，先尝试优雅退出，必要时发送 `SIGKILL`，最后清空 PID 文件。
+
+**方式二：分别启动（便于独立调试）**
 - ✅ **Phase 1**: 数据库 ORM 层 (12表 + SQLAlchemy ORM)
 - ✅ **Phase 2**: 电商本体层 (650行本体 + 550行 SHACL 规则 + 5推理方法)
-- ✅ **Phase 3**: MCP 工具层 (21个工具：3个本体工具 + 18个电商工具)
+# 终端 1: MCP 服务器（日志写入 logs/server_*.log）
 - ✅ **Phase 4**: Agent 对话优化 (系统提示词 + 8阶段状态跟踪 + 质量评分 + 意图识别 + 推荐引擎)
 - ✅ **Phase 5**: Gradio 电商 UI (5 Tab 可视化界面 + 实时分析面板)
-
+# 终端 2: Gradio UI（日志写入 logs/agent_*.log）
 ## 📁 目录结构
+
+# 终端 3: RL 训练控制台（Gradio）
+./scripts/run_training_dashboard.sh
+
+# 终端 4: TensorBoard（默认端口 6006，可用 TB_PORT 覆盖）
+./scripts/run_tensorboard.sh
 
 ```
 ontology-rl-commerce-agent/
@@ -35,6 +52,10 @@ ontology-rl-commerce-agent/
 ├── scripts/                  # 初始化 & 数据/Agent 工具脚本
 │   ├── run_server.sh         # 启动 MCP 服务器 (FastAPI)
 │   ├── run_agent.sh          # 启动 Gradio UI
+│   ├── run_training_dashboard.sh # 启动 RL 训练看板 (Gradio)
+│   ├── run_tensorboard.sh    # 启动 TensorBoard (RL 训练日志)
+│   ├── start_all.sh          # 后台启动 Server/Agent/Dashboard/TensorBoard
+│   ├── stop_all.sh           # 停止所有后台服务并清空 PID
 │   ├── init_database.py      # 初始化 12 张业务表
 │   ├── seed_data.py          # 填充基础用户/商品
 │   ├── add_bulk_products.py  # 生成 1000+ 商品
@@ -310,7 +331,7 @@ export MCP_BASE_URL="http://ontology-mcp-server:8000"
 ./scripts/run_agent.sh
 ```
 
-**方式二：手动启动**
+**方式三：手动启动**
 
 ```bash
 # 终端 1: MCP 服务器

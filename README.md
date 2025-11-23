@@ -790,7 +790,7 @@ See [README.zh.md](README.zh.md#-更新日志) for the detailed Chinese changelo
 
 ## 📄 License
 
-MIT License.
+Released under the [MIT License](LICENSE). A Simplified Chinese reference translation is available in [LICENSE.zh.md](LICENSE.zh.md).
 
 ## 📧 Contact
 

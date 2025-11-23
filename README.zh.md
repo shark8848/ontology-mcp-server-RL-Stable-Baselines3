@@ -1725,7 +1725,8 @@ git clone --branch v1.3.0 https://github.com/shark8848/ontology-mcp-server-RL-St
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证
+- 本项目以 [MIT License](LICENSE) 为准。
+- 提供 [LICENSE.zh.md](LICENSE.zh.md) 供中文读者参考（如与英文有出入，以英文版为准）。
 
 ## 📧 联系方式
 

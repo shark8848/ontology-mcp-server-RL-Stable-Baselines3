@@ -38,9 +38,10 @@ LOGGER = get_logger(__name__)
 class TrainingLogger(BaseCallback):
     """自定义训练日志回调"""
     
-    def __init__(self, log_dir: str, verbose: int = 0):
+    def __init__(self, log_dir: str, verbose: int = 0, step_log_interval: int = 1):
         super().__init__(verbose)
         self.log_dir = log_dir
+        self.step_log_interval = max(1, step_log_interval)
         self.episode_rewards: List[float] = []
         self.episode_lengths: List[int] = []
         self.episode_stats: List[Dict[str, Any]] = []
@@ -48,7 +49,15 @@ class TrainingLogger(BaseCallback):
         os.makedirs(log_dir, exist_ok=True)
     
     def _on_step(self) -> bool:
-        """每步调用"""
+        """每步调用，在日志中打印当前步信息"""
+        if self.verbose > 0 and self.num_timesteps % self.step_log_interval == 0:
+            rewards = self.locals.get("rewards")
+            dones = self.locals.get("dones")
+            mean_reward = float(np.mean(rewards)) if rewards is not None else None
+            any_done = bool(np.any(dones)) if dones is not None else False
+            reward_str = f" reward={mean_reward:.4f}" if mean_reward is not None else ""
+            done_str = " done" if any_done else ""
+            LOGGER.info(f"[RL Step {self.num_timesteps}]{reward_str}{done_str}")
         return True
     
     def _on_rollout_end(self) -> None:
@@ -255,7 +264,7 @@ class PPOTrainer:
             ),
             
             # 自定义日志回调
-            TrainingLogger(log_dir=self.log_dir),
+            TrainingLogger(log_dir=self.log_dir, verbose=1),
         ])
         
         # 开始训练

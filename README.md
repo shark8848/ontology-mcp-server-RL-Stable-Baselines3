@@ -310,14 +310,22 @@ tail -f logs/server_*.log
 
 **方式二：分别启动（便于独立调试）**
 
-# 终端 1: MCP 服务器（日志写入 logs/server_*.log）
+***MCP 服务器***
+```
 ./scripts/run_server.sh
-# 终端 2: Gradio UI（日志写入 logs/agent_*.log）
+```
+***Gradio UI***
+```
 ./scripts/run_agent.sh
-# 终端 3: RL 训练控制台（Gradio）
+```
+***RL 训练控制台***
+```
 ./scripts/run_training_dashboard.sh
-# 终端 4: TensorBoard（默认端口 6006，可用 TB_PORT 覆盖）
+```
+***TensorBoard***
+```
 ./scripts/run_tensorboard.sh
+```
 
 **方式三：手动启动**
 

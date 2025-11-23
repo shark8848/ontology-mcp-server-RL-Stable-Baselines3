@@ -322,16 +322,29 @@ tail -f logs/server_*.log
 **方式三：手动启动**
 
 ```bash
-# 终端 1: MCP 服务器
+# 终端 1: MCP 服务器 (FastAPI)
 source .venv/bin/activate
 export ONTOLOGY_DATA_DIR="$(pwd)/data"
 uvicorn ontology_mcp_server.server:app --host 0.0.0.0 --port 8000
 
-# 终端 2: Gradio UI
+# 终端 2: Gradio UI (客户对话界面)
 source .venv/bin/activate
 export ONTOLOGY_DATA_DIR="$(pwd)/data"
+export MCP_BASE_URL="http://127.0.0.1:8000"   # 指向正在运行的 MCP Server
 python -m agent.gradio_ui
+
+# 终端 3: RL 训练控制台 (Gradio)
+source .venv/bin/activate
+export ONTOLOGY_DATA_DIR="$(pwd)/data"
+export MCP_BASE_URL="http://127.0.0.1:8000"
+python scripts/run_training_dashboard.py
+
+# 终端 4: TensorBoard (RL 训练日志)
+source .venv/bin/activate
+tensorboard --logdir data/rl_training/logs/tensorboard --host 0.0.0.0 --port 6006
 ```
+
+> 如果需要在手动模式下指定 Gradio 监听地址/端口，可提前设置 `GRADIO_SERVER_NAME=0.0.0.0`、`GRADIO_SERVER_PORT=7860`（Agent UI）以及 `TRAINING_DASHBOARD_PORT=7861` 等环境变量，然后再运行对应脚本。
 
 ### 5. 访问界面
 

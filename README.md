@@ -680,6 +680,15 @@ See [README.zh.md](README.zh.md#-更新日志) for the detailed Chinese changelo
 - **RDFLib & PySHACL** – Ontology reasoning + SHACL validation.
 - **SQLAlchemy** – ORM foundation.
 
+## 🧩 Case Study
+
+- **Scenario**: VIP buyer with a ¥200k budget asks the agent to “spend it all” on the most expensive phones, covering insights → recommendations → cart → payment → after-sales tracking.
+- **Highlights**: 16-step memory chain, 22 MCP tools (6 ontology calls, 2 SHACL checks), dynamic charts, automated VIP discounting, cart + checkout orchestration.
+- **Full walk-through**: [`docs/VIP_Customer_Case.md`](docs/VIP_Customer_Case.md).
+
+![Persona & insight board](docs/images/vip-case/image-1763910625710.png)
+![Checkout summary](docs/images/vip-case/image-1763910897922.png)
+
 ## 📖 Citation
 
 ```

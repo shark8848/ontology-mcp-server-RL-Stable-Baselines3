@@ -1612,6 +1612,15 @@ git clone --branch v1.3.0 https://github.com/shark8848/ontology-mcp-server-RL-St
 
 ---
 
+## 🧩 案例展示
+
+- **场景**：VIP 客户携 ¥20 万预算，要求一次性购买最贵旗舰机，Agent 需要完成“洞察 → 推荐 → 购物车 → 支付 → 售后跟踪”的闭环。
+- **亮点**：16 条对话记忆、22 个 MCP 工具（含 6 次本体推理、2 次 SHACL 校验）、实时图表、自动 VIP 折扣、购物车/结算联动。
+- **完整过程**：见 [`docs/VIP_Customer_Case.md`](docs/VIP_Customer_Case.md)。
+
+![用户画像洞察](docs/images/vip-case/image-1763910625710.png)
+![结算信息汇总](docs/images/vip-case/image-1763910897922.png)
+
 ## 📖 Citation
 
 如果该项目在您的研究或产品中发挥了作用，请引用下方条目以致谢：

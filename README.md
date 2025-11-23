@@ -344,7 +344,7 @@ source .venv/bin/activate
 tensorboard --logdir data/rl_training/logs/tensorboard --host 0.0.0.0 --port 6006
 ```
 
-> 如果需要在手动模式下指定 Gradio 监听地址/端口，可在运行脚本前设置 `GRADIO_SERVER_NAME=0.0.0.0` 并调整 `GRADIO_SERVER_PORT`（先启动 Agent 可设 7860，启动训练看板前再改 7861 等），Gradio 会自动读取这些环境变量。
+> 如果需要在手动模式下指定 Gradio 监听地址/端口，可在运行脚本前设置 `GRADIO_SERVER_NAME=0.0.0.0` 并调整 `GRADIO_SERVER_PORT`。使用 `run_agent.sh` / `run_training_dashboard.sh` 时，可改写 `AGENT_HOST/AGENT_PORT` 与 `TRAINING_DASHBOARD_HOST/TRAINING_DASHBOARD_PORT`，脚本会自动把它们注入对应的 Gradio 环境变量，保持 7860/7861 默认解耦。
 
 ### 5. 访问界面
 
@@ -992,6 +992,12 @@ export OLLAMA_API_KEY="ollama"               # Ollama 不校验密钥
 export GRADIO_SERVER_NAME=0.0.0.0            # 适用于所有 Gradio launch()
 export GRADIO_SERVER_PORT=7860               # 启动 Agent UI 前设置
 # 若需不同端口，可在启动训练看板前改为 7861，再运行 scripts/run_training_dashboard.py
+
+export AGENT_HOST=0.0.0.0                    # run_agent.sh 默认监听地址
+export AGENT_PORT=7860                       # run_agent.sh 默认端口
+export TRAINING_DASHBOARD_HOST=0.0.0.0       # run_training_dashboard.sh 默认监听地址
+export TRAINING_DASHBOARD_PORT=7861          # 与 Agent 分开避免冲突
+# 两个脚本会在启动前自动将上述变量写入 GRADIO_SERVER_NAME/PORT，并分别独立生效
 
 export LOG_DIR="$(pwd)/logs"                # start_all.sh / run_*.sh 日志目录
 export TB_LOG_DIR="$(pwd)/data/rl_training/logs/tensorboard"  # TensorBoard logdir

@@ -25,6 +25,7 @@ from .conversation_state import ConversationStateManager, ConversationStage
 from .quality_metrics import QualityMetricsTracker, TaskOutcome
 from .intent_tracker import IntentTracker
 from .recommendation_engine import RecommendationEngine
+import json
 
 # 优先使用 ChromaDB 记忆,回退到基础记忆
 try:
@@ -137,6 +138,14 @@ class LangChainAgent:
         self._pending_validation: Optional[Dict[str, Any]] = None
         self._validation_issued_turn: Optional[int] = None
         self._last_validation_iteration: Optional[int] = None
+
+        self._negative_history_keywords = [
+            "无法生成图表",
+            "图表功能暂时不可用",
+            "数据可视化工具暂时无法提供",
+            "不能生成柱状图",
+            "工具已被禁用",
+        ]
         
         # 加载记忆配置
         memory_config = get_memory_config()
@@ -425,6 +434,8 @@ class LangChainAgent:
                 add_log("memory_context", context_prefix, {
                     "length": len(context_prefix)
                 })
+        if context_prefix:
+            context_prefix = self._filter_negative_history(context_prefix)
         
         # 构造系统提示(如果有历史上下文)
         messages: List[Dict[str, Any]] = []
@@ -792,6 +803,90 @@ class LangChainAgent:
             "tool_calls": len(tool_log)
         })
 
+        # 提取图表数据
+        charts: List[Dict[str, Any]] = []
+        chart_tool_calls = [entry for entry in tool_log if entry.get("tool") == "analytics_get_chart_data"]
+        
+        # 获取当前意图用于过滤图表
+        current_intent = None
+        intent_entities = {}
+        if self.intent_tracker:
+            intent_obj = self.intent_tracker.get_current_intent()
+            if intent_obj:
+                current_intent = intent_obj.category.value
+                intent_entities = intent_obj.extracted_entities
+        
+        # 提取用户上下文（用户ID等）
+        user_context_info = {}
+        if hasattr(self, 'memory') and self.memory and hasattr(self.memory, 'user_context_manager'):
+            ctx = self.memory.user_context_manager.get_context()
+            user_context_info = {
+                'user_id': ctx.user_id,
+                'has_user_context': ctx.user_id is not None
+            }
+        
+        for entry in chart_tool_calls:
+            try:
+                obs = entry.get("observation", "{}")
+                parsed = json.loads(obs) if isinstance(obs, str) else obs
+                chart_payload = parsed
+                if isinstance(parsed, dict) and "result" in parsed:
+                    result_section = parsed.get("result")
+                    if isinstance(result_section, str):
+                        try:
+                            chart_payload = json.loads(result_section)
+                        except json.JSONDecodeError:
+                            chart_payload = result_section
+                    else:
+                        chart_payload = result_section
+                if (
+                    isinstance(chart_payload, dict)
+                    and chart_payload.get("chart_type")
+                    and "error" not in chart_payload
+                ):
+                    # 添加意图和上下文元数据到图表
+                    if "metadata" not in chart_payload:
+                        chart_payload["metadata"] = {}
+                    chart_payload["metadata"]["intent"] = current_intent
+                    chart_payload["metadata"]["intent_entities"] = intent_entities
+                    chart_payload["metadata"]["user_context"] = user_context_info
+                    
+                    # 从工具输入中提取user_id参数
+                    tool_input = entry.get("input", {})
+                    if isinstance(tool_input, dict):
+                        chart_payload["metadata"]["requested_user_id"] = tool_input.get("user_id")
+                    
+                    charts.append(chart_payload)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("图表工具返回内容解析失败", exc_info=True)
+
+        if chart_tool_calls:
+            if charts:
+                chart_titles = [chart.get("title", chart.get("chart_type")) for chart in charts]
+                logger.info(
+                    "已从 %d 次图表工具调用中解析出 %d 个图表: %s",
+                    len(chart_tool_calls),
+                    len(charts),
+                    chart_titles,
+                )
+            else:
+                last_observation = chart_tool_calls[-1].get("observation", "")
+                preview = str(last_observation)[:200]
+                logger.warning(
+                    "共有 %d 次图表工具调用，但未解析出可用图表。最后一次返回: %s",
+                    len(chart_tool_calls),
+                    preview,
+                )
+
+        chart_request_keywords = ["图表", "柱状图", "趋势图", "饼图", "对比图", "可视化"]
+        chart_requested = any(keyword in user_input for keyword in chart_request_keywords)
+        if chart_requested and not charts:
+            logger.warning(
+                "检测到图表需求但没有可用图表输出: tool_calls=%d response_preview=%s",
+                len(chart_tool_calls),
+                final_answer[:160] if final_answer else "",
+            )
+
         # 构建返回结果
         result = {
             "final_answer": final_answer,
@@ -800,6 +895,7 @@ class LangChainAgent:
             "tool_log": tool_log,
             "raw_messages": messages,
             "execution_log": execution_log,  # 新增详细执行日志
+            "charts": charts,  # 新增图表数据
         }
         
         # Phase 4 优化: 添加额外的分析信息
@@ -825,10 +921,26 @@ class LangChainAgent:
         """
         if not self.use_memory or not self.memory:
             return ""
-        
+
         if hasattr(self.memory, 'get_context_for_prompt'):
             return self.memory.get_context_for_prompt()
         return ""
+
+    def _filter_negative_history(self, context: str) -> str:
+        """过滤掉含有图表不可用描述的历史，避免误导 LLM。"""
+        if not context:
+            return context
+        lines = context.splitlines()
+        filtered_lines = []
+        removed = 0
+        for line in lines:
+            if any(keyword in line for keyword in self._negative_history_keywords):
+                removed += 1
+                continue
+            filtered_lines.append(line)
+        if removed:
+            logger.info("过滤记忆负面记录: 移除 %d 行", removed)
+        return "\n".join(filtered_lines)
     
     def get_full_history(self) -> List[Dict[str, Any]]:
         """获取完整对话历史

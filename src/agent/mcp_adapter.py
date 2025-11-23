@@ -387,6 +387,14 @@ class MCPAdapter:
         class UserProfileInput(BaseModel):
             user_id: int = Field(..., description="用户 ID")
 
+        class GetChartDataInput(BaseModel):
+            chart_type: str = Field(..., description="图表类型: trend/pie/bar/comparison")
+            days: int | None = Field(default=7, description="趋势图天数")
+            user_id: int | None = Field(default=None, description="用户ID过滤")
+            top_n: int | None = Field(default=10, description="排行榜数量")
+            category: str | None = Field(default=None, description="商品分类过滤")
+            user_ids: List[int] | None = Field(default=None, description="对比的用户ID列表")
+
         def _explain_discount_tool(is_vip: bool, amount: float) -> str:
             result = adapter._invoke_or_raise(
                 "ontology.explain_discount",
@@ -527,6 +535,34 @@ class MCPAdapter:
             )
             return json.dumps(result, ensure_ascii=False)
 
+        def _get_chart_data_tool(**kwargs: Any) -> str:
+            """生成图表数据"""
+            try:
+                from .analytics_service import get_chart_data
+                logger.info(
+                    "调用图表工具: chart_type=%s params=%s",
+                    kwargs.get("chart_type"),
+                    json.dumps(kwargs, ensure_ascii=False),
+                )
+                result = get_chart_data(**kwargs)
+                labels = result.get("labels")
+                series = result.get("series")
+                logger.info(
+                    "图表工具返回成功: chart_type=%s title=%s labels=%d series=%d",
+                    result.get("chart_type"),
+                    result.get("title"),
+                    len(labels) if isinstance(labels, list) else 0,
+                    len(series) if isinstance(series, list) else 0,
+                )
+                return json.dumps(result, ensure_ascii=False)
+            except Exception as e:
+                logger.error(
+                    "图表数据生成失败: chart_type=%s error=%s",
+                    kwargs.get("chart_type"),
+                    str(e),
+                )
+                return json.dumps({"error": str(e), "chart_type": kwargs.get("chart_type")}, ensure_ascii=False)
+
         tools = [
             ToolDefinition(
                 name="ontology_explain_discount",
@@ -657,6 +693,12 @@ class MCPAdapter:
                     description="获取用户画像信息与等级推理。",
                     func=_get_user_profile_tool,
                     args_schema=UserProfileInput,
+                ),
+                ToolDefinition(
+                    name="analytics_get_chart_data",
+                    description="生成数据可视化图表：trend(趋势图)、pie(饼图)、bar(柱状图)、comparison(对比图)。用户请求图表时调用此工具。",
+                    func=lambda **kwargs: _get_chart_data_tool(**kwargs),
+                    args_schema=GetChartDataInput,
                 ),
             ]
         )

@@ -50,6 +50,7 @@ class IntentCategory(Enum):
     # 服务类
     VIP_INQUIRY = "vip_inquiry"       # VIP 咨询
     RECOMMENDATION = "recommendation" # 寻求推荐
+    CHART_REQUEST = "chart_request"   # 数据可视化需求
     
     # 其他
     GREETING = "greeting"             # 问候
@@ -149,37 +150,54 @@ class IntentRecognizer:
             r"推荐|建议|什么好|帮我选",
             r"recommend|suggest|best",
         ],
+        IntentCategory.CHART_REQUEST: [
+            r"趋势图|柱状图|饼状图|折线图|图表|统计图|可视化|对比图",
+            r"chart|graph|plot|trend|bar|pie|visualize",
+        ],
         IntentCategory.GREETING: [
             r"你好|嗨|hello|hi|早上好|晚上好",
         ],
     }
+
+    CHART_KEYWORDS = {
+        "trend": ["趋势", "trend", "折线", "line"],
+        "bar": ["柱", "bar"],
+        "pie": ["饼", "占比", "pie"],
+        "comparison": ["对比", "比较", "compare"],
+    }
     
-    def recognize(self, user_input: str, turn_id: int = 0) -> Intent:
-        """识别用户意图"""
+    def recognize(self, user_input: str, turn_id: int = 0) -> List[Intent]:
+        """识别用户意图（允许多标签）"""
         user_input_lower = user_input.lower()
-        
+        matches: List[Intent] = []
+
         # 遍历所有意图模式
         for intent_category, patterns in self.INTENT_PATTERNS.items():
             for pattern in patterns:
                 if re.search(pattern, user_input_lower):
-                    # 提取实体（简单版本）
                     entities = self._extract_entities(user_input)
-                    
-                    return Intent(
-                        category=intent_category,
-                        confidence=IntentConfidence.HIGH.value,
-                        extracted_entities=entities,
-                        turn_id=turn_id,
-                        raw_input=user_input,
+                    matches.append(
+                        Intent(
+                            category=intent_category,
+                            confidence=IntentConfidence.HIGH.value,
+                            extracted_entities=entities,
+                            turn_id=turn_id,
+                            raw_input=user_input,
+                        )
                     )
-        
-        # 未识别到意图
-        return Intent(
-            category=IntentCategory.UNKNOWN,
-            confidence=IntentConfidence.LOW.value,
-            turn_id=turn_id,
-            raw_input=user_input,
-        )
+                    break
+
+        if not matches:
+            matches.append(
+                Intent(
+                    category=IntentCategory.UNKNOWN,
+                    confidence=IntentConfidence.LOW.value,
+                    turn_id=turn_id,
+                    raw_input=user_input,
+                )
+            )
+
+        return matches
     
     def _extract_entities(self, text: str) -> Dict[str, Any]:
         """提取实体（商品名、数量、价格等）"""
@@ -200,6 +218,11 @@ class IntentRecognizer:
         if product_id_match:
             entities["product_id"] = product_id_match.group(0)
         
+        for chart_type, words in self.CHART_KEYWORDS.items():
+            if any(word in text for word in words):
+                entities.setdefault("chart_types", set()).add(chart_type)
+        if "chart_types" in entities:
+            entities["chart_types"] = sorted(entities["chart_types"])
         return entities
 
 
@@ -209,18 +232,18 @@ class IntentTracker:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.intent_history: List[Intent] = []
+        self.intent_labels: List[Intent] = []
         self.recognizer = IntentRecognizer()
         self.composite_intents: List[CompositeIntent] = []
     
     def track_intent(self, user_input: str, turn_id: int) -> Intent:
-        """跟踪当前意图"""
-        intent = self.recognizer.recognize(user_input, turn_id)
-        self.intent_history.append(intent)
-        
-        # 检测复合意图
+        """跟踪当前意图（返回主意图，并保留所有标签）"""
+        intents = self.recognizer.recognize(user_input, turn_id)
+        self.intent_labels.extend(intents)
+        primary = intents[0]
+        self.intent_history.append(primary)
         self._detect_composite_intents()
-        
-        return intent
+        return primary
     
     def _detect_composite_intents(self):
         """检测复合意图"""
@@ -337,6 +360,7 @@ class IntentTracker:
             "session_id": self.session_id,
             "total_turns": len(self.intent_history),
             "intent_distribution": intent_distribution,
+            "intent_labels": [i.category.value for i in self.intent_labels[-5:]],
             "composite_intents": [
                 {
                     "name": c.name,

@@ -20,9 +20,29 @@ import uuid
 import json
 import html
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import gradio as gr
 import yaml
+import plotly.graph_objects as go
+import plotly.io as pio
+import base64
+import tempfile
+from io import BytesIO
+from PIL import Image
+from gradio_client import utils as gradio_client_utils
+
+
+_ORIGINAL_GRADIO_GET_TYPE = gradio_client_utils.get_type
+
+
+def _safe_gradio_get_type(schema):
+    if isinstance(schema, bool):
+        return "boolean" if schema else "never"
+    return _ORIGINAL_GRADIO_GET_TYPE(schema)
+
+
+gradio_client_utils.get_type = _safe_gradio_get_type
 
 from agent.react_agent import LangChainAgent
 from agent.logger import get_logger
@@ -925,6 +945,52 @@ def format_ecommerce_analysis() -> str:
     return "\n".join(lines)
 
 
+def _filter_charts_by_intent(charts: List[Dict[str, Any]], user_input: str, agent_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """根据意图和上下文过滤图表
+    
+    Args:
+        charts: 所有生成的图表
+        user_input: 用户输入
+        agent_result: Agent执行结果
+        
+    Returns:
+        过滤后的图表列表
+    """
+    if not charts:
+        return []
+    
+    # 获取意图信息
+    intent_summary = agent_result.get("intent_summary", {})
+    current_intent = intent_summary.get("current_intent", "")
+    
+    # 从用户输入中提取用户ID关键词
+    user_id_keywords = ["我的", "个人", "用户", "user_id", "用户id"]
+    mentions_personal = any(keyword in user_input.lower() for keyword in user_id_keywords)
+    
+    LOGGER.info("图表过滤: 意图=%s, 提到个人数据=%s, 图表总数=%d", current_intent, mentions_personal, len(charts))
+    
+    filtered = []
+    for chart in charts:
+        metadata = chart.get("metadata", {})
+        chart_user_id = metadata.get("requested_user_id")
+        chart_title = chart.get("title", "未命名图表")
+        
+        # 规则: 如果用户明确提到个人数据，只保留有用户ID的图表
+        if mentions_personal:
+            if chart_user_id is not None:
+                filtered.append(chart)
+                LOGGER.info("✓ 保留个人图表: %s (user_id=%s)", chart_title, chart_user_id)
+            else:
+                LOGGER.info("✗ 过滤全局图表: %s (用户请求个人数据)", chart_title)
+        else:
+            # 用户未特指个人，保留所有Agent生成的图表
+            filtered.append(chart)
+            LOGGER.info("✓ 保留图表: %s (通用查询)", chart_title)
+    
+    LOGGER.info("图表过滤结果: 保留 %d/%d 个图表", len(filtered), len(charts))
+    return filtered
+
+
 def _normalize_chatbot_messages(history):
     normalized = []
     if not history:
@@ -959,12 +1025,21 @@ def handle_user_message(user_message, chat_history=None):
     chat_history.append(assistant_placeholder)
 
     LOGGER.info("Gradio incoming: %s", user_message[:200])
-    
+    chart_figures: List[Any] = []
+
     try:
         res = AGENT.run(user_message)
         final = res.get("final_answer") or ""
         plan = res.get("plan") or "(no plan provided)"
         tool_calls = res.get("tool_log", [])
+        charts = res.get("charts", [])
+        LOGGER.info("handle_user_message: 收到 %d 个图表对象", len(charts))
+        
+        # 根据意图和上下文过滤图表
+        filtered_charts = _filter_charts_by_intent(charts, user_message, res)
+        if len(filtered_charts) < len(charts):
+            LOGGER.info("图表过滤: %d -> %d (移除了不相关的图表)", len(charts), len(filtered_charts))
+        charts = filtered_charts
         
         # Phase 4/5: 获取电商增强信息
         intent_summary = res.get("intent_summary", {})
@@ -1025,6 +1100,22 @@ def handle_user_message(user_message, chat_history=None):
             context_text = "\n".join([f"> {line}" for line in ecommerce_context])
             final = f"{final}\n\n---\n**智能助手状态**\n{context_text}"
         
+        # 更新助手消息内容
+        assistant_placeholder["content"] = final
+        
+        # 将图表转换为图片并添加到聊天历史中
+        if charts:
+            chart_markdown_messages = _render_charts_as_images(charts)
+            # 将图片 Markdown 合并到回复内容中
+            if chart_markdown_messages:
+                combined_charts = "".join(chart_markdown_messages)
+                final = f"{final}\n{combined_charts}"
+                LOGGER.info("已将 %d 个图表（Markdown 格式）嵌入到回复内容中", len(chart_markdown_messages))
+                # 更新助手消息内容
+                assistant_placeholder["content"] = final
+        
+        LOGGER.info("图表已转换为 Markdown 图片并嵌入到聊天消息中")
+        
         # 递增对话计数器
         CONVERSATION_COUNTER += 1
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1068,12 +1159,11 @@ def handle_user_message(user_message, chat_history=None):
         error_msg = f"处理请求时发生错误: {type(e).__name__}: {str(e)}"
         LOGGER.error(error_msg, exc_info=True)
         final = f"❌ {error_msg}"
+        assistant_placeholder["content"] = final
         plan_display = f"## 📋 Plan / Tasks\n\n**执行失败**: {error_msg}"
         tool_display = f"## 🔧 Tool Calls\n\n**执行失败**: {error_msg}"
         execution_log = f"## 📋 执行日志历史\n\n**执行失败**: {error_msg}"
         ecommerce_display = f"## 🛍️ 电商分析\n\n**执行失败**: {error_msg}"
-
-    assistant_placeholder["content"] = final
     memory_md = format_memory_context()
     
     return (
@@ -1084,6 +1174,256 @@ def handle_user_message(user_message, chat_history=None):
         gr.update(value=ecommerce_display),
         gr.update(value=execution_log),
     )
+
+
+def _convert_plotly_to_image(fig: go.Figure, width: int = 800, height: int = 500) -> Optional[str]:
+    """将 Plotly 图表转换为 base64 编码的图片字符串
+    
+    Args:
+        fig: Plotly Figure 对象
+        width: 图片宽度
+        height: 图片高度
+    
+    Returns:
+        base64 编码的 Markdown 图片，如果转换失败则返回 None
+    """
+    try:
+        # 转换为 PNG 图片（bytes）
+        img_bytes = pio.to_image(fig, format='png', width=width, height=height, engine='kaleido')
+        
+        # 转换为 base64
+        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # 返回 Markdown 图片语法（data URL）
+        data_url = f"data:image/png;base64,{img_base64}"
+        
+        LOGGER.info("图表已转换为 base64 图片，大小: %d bytes", len(img_bytes))
+        return data_url
+    except Exception as e:
+        LOGGER.error("图表转换为图片失败: %s", str(e))
+        return None
+
+
+def _render_charts_as_images(charts: List[Dict[str, Any]]) -> List[str]:
+    """将图表数据渲染为图片，返回适用于 Gradio Chatbot 的消息格式
+    
+    Returns:
+        包含图片 HTML 的消息列表
+    """
+    if not charts:
+        return []
+    
+    chart_messages = []
+    
+    for idx, chart in enumerate(charts, 1):
+        title = chart.get("title", "图表")
+        description = chart.get("description", "")
+        
+        # 构建 Plotly 图表
+        payload = _build_plotly_payload(chart)
+        if not payload:
+            LOGGER.warning("无法生成图表 Plotly payload: %s", title)
+            continue
+        
+        figure = go.Figure()
+        figure.update_layout(**payload["layout"])
+        
+        for trace in payload["data"]:
+            trace_type = (trace.get("type") or "").lower()
+            if trace_type == "pie":
+                figure.add_trace(
+                    go.Pie(
+                        labels=trace.get("labels", []),
+                        values=trace.get("values", []),
+                        textinfo=trace.get("textinfo") or "label+percent",
+                        hole=trace.get("hole"),
+                    )
+                )
+            elif trace_type == "scatter":
+                figure.add_trace(
+                    go.Scatter(
+                        x=trace.get("x", []),
+                        y=trace.get("y", []),
+                        mode=trace.get("mode", "lines+markers"),
+                        name=trace.get("name"),
+                    )
+                )
+            elif trace_type == "bar":
+                figure.add_trace(
+                    go.Bar(
+                        x=trace.get("x", []),
+                        y=trace.get("y", []),
+                        name=trace.get("name"),
+                    )
+                )
+        
+        # 转换为图片
+        img_data_url = _convert_plotly_to_image(figure)
+        if img_data_url:
+            # 构建包含标题和图片的 Markdown 格式
+            chart_md = f"\n\n---\n### 📊 {title}\n"
+            if description:
+                chart_md += f"*{description}*\n\n"
+            # 使用 Markdown 图片语法
+            chart_md += f"![{title}]({img_data_url})\n"
+            
+            chart_messages.append(chart_md)
+            LOGGER.info("✓ 图表转换为 Markdown 图片成功: %s", title)
+        else:
+            LOGGER.warning("✗ 图表转换为图片失败: %s", title)
+    
+    return chart_messages
+
+
+def _render_charts_markdown(charts: List[Dict[str, Any]]) -> str:
+    """将图表数据渲染为文本表格，方便展示在聊天记录中（备用方案）"""
+    if not charts:
+        return ""
+    
+    html_parts = ["\n\n---\n## 📊 数据可视化\n"]
+    
+    for idx, chart in enumerate(charts, 1):
+        chart_type = chart.get("chart_type", "unknown")
+        title = chart.get("title", "图表")
+        labels = chart.get("labels", [])
+        series = chart.get("series", [])
+        description = chart.get("description", "")
+        
+        html_parts.append(f"\n### {idx}. {title}\n")
+        if description:
+            html_parts.append(f"> {description}\n")
+        
+        # 渲染为Markdown表格
+        if labels and series:
+            # 表头
+            header = ["项目"] + [s.get("name", f"系列{i}") for i, s in enumerate(series, 1)]
+            html_parts.append("\n| " + " | ".join(header) + " |")
+            html_parts.append("| " + " | ".join(["---"] * len(header)) + " |")
+            
+            # 数据行
+            for i, label in enumerate(labels):
+                row = [str(label)]
+                for s in series:
+                    data_list = s.get("data", [])
+                    value = data_list[i] if i < len(data_list) else "-"
+                    row.append(str(value))
+                html_parts.append("| " + " | ".join(row) + " |")
+            html_parts.append("")
+        
+        html_parts.append(f"\n*图表类型: {chart_type}*\n")
+    
+    return "\n".join(html_parts)
+
+
+def _build_plotly_payload(chart: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    chart_type = (chart.get("chart_type") or "").lower()
+    labels = chart.get("labels") or []
+    series = chart.get("series") or []
+    if not labels or not series:
+        return None
+
+    layout = {
+        "title": chart.get("title", "图表"),
+        "margin": {"l": 40, "r": 10, "t": 60, "b": 40},
+        "legend": {"orientation": "h"},
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+    }
+    data = []
+
+    if chart_type == "pie":
+        values = series[0].get("data") if series else []
+        if not values:
+            return None
+        data.append(
+            {
+                "type": "pie",
+                "labels": labels,
+                "values": values,
+                "textinfo": "label+percent",
+            }
+        )
+        layout["showlegend"] = False
+    elif chart_type == "trend":
+        for item in series:
+            data.append(
+                {
+                    "type": "scatter",
+                    "mode": "lines+markers",
+                    "name": item.get("name"),
+                    "x": labels,
+                    "y": item.get("data", []),
+                }
+            )
+    else:
+        if chart_type == "comparison":
+            layout["barmode"] = "group"
+        for item in series:
+            data.append(
+                {
+                    "type": "bar",
+                    "name": item.get("name"),
+                    "x": labels,
+                    "y": item.get("data", []),
+                }
+            )
+
+    return {"data": data, "layout": layout}
+
+
+def _build_plotly_figures(charts: List[Dict[str, Any]]) -> List[Any]:
+    if not charts:
+        LOGGER.info("_build_plotly_figures: 无图表")
+        return []
+
+    figures: List[Any] = []
+    for chart in charts:
+        LOGGER.info(
+            "_build_plotly_figures: 准备渲染 chart_type=%s title=%s",
+            chart.get("chart_type"),
+            chart.get("title"),
+        )
+        payload = _build_plotly_payload(chart)
+        if not payload:
+            LOGGER.warning(
+                "_build_plotly_figures: 无法生成 Plotly payload，chart=%s",
+                json.dumps(chart, ensure_ascii=False)[:200],
+            )
+            continue
+        figure = go.Figure()
+        figure.update_layout(**payload["layout"])
+        for trace in payload["data"]:
+            trace_type = (trace.get("type") or "").lower()
+            if trace_type == "pie":
+                figure.add_trace(
+                    go.Pie(
+                        labels=trace.get("labels", []),
+                        values=trace.get("values", []),
+                        textinfo=trace.get("textinfo") or "label+percent",
+                        hole=trace.get("hole"),
+                    )
+                )
+            elif trace_type == "scatter":
+                figure.add_trace(
+                    go.Scatter(
+                        x=trace.get("x", []),
+                        y=trace.get("y", []),
+                        mode=trace.get("mode", "lines+markers"),
+                        name=trace.get("name"),
+                    )
+                )
+            elif trace_type == "bar":
+                figure.add_trace(
+                    go.Bar(
+                        x=trace.get("x", []),
+                        y=trace.get("y", []),
+                        name=trace.get("name"),
+                    )
+                )
+            else:
+                figure.add_trace(trace)
+        figures.append(figure)
+    return figures
 
 
 def clear_conversation():
@@ -1206,7 +1546,7 @@ with gr.Blocks(
                             elem_id="ecommerce_panel",
                             elem_classes="tab-content"
                         )
-                
+
                 with gr.TabItem("📊 Execution Log"):
                     with gr.Accordion("展开/折叠执行日志", open=False):
                         execution_log_md = gr.Markdown(
@@ -1367,6 +1707,7 @@ if __name__ == "__main__":
         "server_name": server_name,
         "server_port": port,
         "share": share,
+        "show_api": False,
     }
     
     try:

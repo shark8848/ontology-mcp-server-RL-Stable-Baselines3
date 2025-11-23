@@ -423,7 +423,9 @@ class OrderService:
         with self.db.get_session() as session:
             return (
                 session.query(Order)
-                .options(selectinload(Order.order_items))
+                .options(
+                    selectinload(Order.order_items).selectinload(OrderItem.product)
+                )
                 .filter(Order.order_id == order_id)
                 .first()
             )
@@ -433,7 +435,9 @@ class OrderService:
         with self.db.get_session() as session:
             return (
                 session.query(Order)
-                .options(selectinload(Order.order_items))
+                .options(
+                    selectinload(Order.order_items).selectinload(OrderItem.product)
+                )
                 .filter(Order.order_no == order_no)
                 .first()
             )
@@ -444,7 +448,9 @@ class OrderService:
         with self.db.get_session() as session:
             query = (
                 session.query(Order)
-                .options(selectinload(Order.order_items))
+                .options(
+                    selectinload(Order.order_items).selectinload(OrderItem.product)
+                )
                 .filter(Order.user_id == user_id)
             )
             
@@ -495,6 +501,22 @@ class OrderService:
                 LOGGER.info(f"取消订单: order_id={order_id}")
                 return True
             return False
+
+    def list_orders(self, limit: int = 1000, offset: int = 0) -> List[Order]:
+        """按创建时间倒序返回订单列表，包含订单明细。"""
+        with self.db.get_session() as session:
+            query = (
+                session.query(Order)
+                .options(
+                    selectinload(Order.order_items).selectinload(OrderItem.product)
+                )
+                .order_by(Order.created_at.desc())
+            )
+            return query.limit(limit).offset(offset).all()
+
+    def list_user_orders(self, user_id: int, limit: int = 1000, offset: int = 0) -> List[Order]:
+        """按用户ID返回订单列表（包装 get_user_orders 以兼容旧调用）。"""
+        return self.get_user_orders(user_id=user_id, limit=limit, offset=offset)
 
 
 # ============ 支付服务 ============

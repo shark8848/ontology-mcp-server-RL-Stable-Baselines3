@@ -1,0 +1,166 @@
+{
+  "session_id": "test_analytics_001",
+  "quality_metrics": {
+    "session_id": "test_analytics_001",
+    "total_turns": 5,
+    "quality_score": 35.0,
+    "efficiency": {
+      "avg_response_time": 6.87,
+      "avg_tool_calls": 0.0,
+      "total_tool_calls": 0
+    },
+    "task_completion": {
+      "successful_tasks": 0,
+      "failed_tasks": 0,
+      "success_rate": 0.0
+    },
+    "conversation_quality": {
+      "clarification_rate": 0.4,
+      "proactive_rate": 0.4
+    },
+    "user_satisfaction": null
+  },
+  "intent_analysis": {
+    "session_id": "test_analytics_001",
+    "total_turns": 5,
+    "intent_distribution": {
+      "greeting": 1,
+      "search": 1,
+      "view_detail": 1,
+      "price_inquiry": 1,
+      "add_to_cart": 1
+    },
+    "composite_intents": [
+      {
+        "name": "purchase_intent",
+        "description": "用户先咨询商品信息，然后进行购买操作",
+        "confidence": 0.8,
+        "sub_intents": [
+          "price_inquiry(0.80)",
+          "add_to_cart(0.80)"
+        ]
+      }
+    ],
+    "current_intent": "add_to_cart(0.80)",
+    "predicted_next": [
+      "view_cart",
+      "checkout"
+    ]
+  },
+  "conversation_state": {
+    "current_stage": "cart",
+    "stage_history": [
+      "cart"
+    ],
+    "user_context": {
+      "user_id": null,
+      "is_vip": false,
+      "username": null,
+      "last_viewed_products": [],
+      "cart_item_count": 0,
+      "recent_order_id": null
+    },
+    "intent_history": [
+      "你好",
+      "搜索游戏本",
+      "看看第一个商品的详情",
+      "多少钱？",
+      "加入购物车"
+    ]
+  },
+  "quality_export": {
+    "session_id": "test_analytics_001",
+    "summary": {
+      "session_id": "test_analytics_001",
+      "total_turns": 5,
+      "quality_score": 35.0,
+      "efficiency": {
+        "avg_response_time": 6.87,
+        "avg_tool_calls": 0.0,
+        "total_tool_calls": 0
+      },
+      "task_completion": {
+        "successful_tasks": 0,
+        "failed_tasks": 0,
+        "success_rate": 0.0
+      },
+      "conversation_quality": {
+        "clarification_rate": 0.4,
+        "proactive_rate": 0.4
+      },
+      "user_satisfaction": null
+    },
+    "turns": [
+      {
+        "turn_id": 1,
+        "user_input": "你好",
+        "agent_response": "您好！欢迎回来！我是您的专属购物助手，很高兴再次为您服务。\n\n刚才我们正在讨论游戏本的相关信息，您提到想要将商品加入购物车。为了帮您完成这个操作，我需要确认几个信息：\n\n1. **您想要加入购物车的具体商品** - 请告诉我商品名称或型号\n2. **购买数量** - 您需要购买几台？\n3. **您的用户ID** - 这样才能将商品添加到您的专属购物车中\n\n或者，如果您有其他需求，比如：\n- 重新搜索游戏本\n- 查看其他商品详情\n- 了解促销活动\n- 查询订单状态\n\n请随时告诉我，我会全力协助您！\n\n您希望继续处理购物车添加，还是有其他需要帮助的呢？",
+        "response_time": 8.539863109588623,
+        "tool_calls_count": 0,
+        "tool_calls_names": [],
+        "task_completed": false,
+        "outcome": "partial",
+        "needs_clarification": false,
+        "proactive_guidance": false,
+        "user_satisfaction": null,
+        "metadata": {}
+      },
+      {
+        "turn_id": 2,
+        "user_input": "搜索游戏本",
+        "agent_response": "您好！很高兴为您搜索游戏本。为了给您推荐最合适的产品，请问您对游戏本有什么具体的要求吗？比如：\n\n- **品牌偏好**：联想、华硕、戴尔、惠普等特定品牌？\n- **预算范围**：大概在什么价位区间？\n- **配置需求**：对处理器、显卡、内存、屏幕尺寸等有什么特别要求吗？\n- **主要用途**：除了游戏，还有其他用途需求吗？\n\n有了这些信息，我就能为您精准搜索到最符合您需求的游戏本了！",
+        "response_time": 6.9871532917022705,
+        "tool_calls_count": 0,
+        "tool_calls_names": [],
+        "task_completed": false,
+        "outcome": "partial",
+        "needs_clarification": false,
+        "proactive_guidance": true,
+        "user_satisfaction": null,
+        "metadata": {}
+      },
+      {
+        "turn_id": 3,
+        "user_input": "看看第一个商品的详情",
+        "agent_response": "您好！我来帮您查看第一个商品的详情。\n\n不过我需要先确认一下，您说的是哪个商品呢？因为之前的搜索功能出现了一些技术问题，我无法直接获取到搜索结果列表。\n\n请您告诉我：\n- 您想查看的具体商品名称或型号是什么？\n- 或者您可以描述一下您关注的商品特征（比如品牌、配置、价格范围等）\n\n这样我就能为您提供准确的商品信息和详情了！",
+        "response_time": 5.735098600387573,
+        "tool_calls_count": 0,
+        "tool_calls_names": [],
+        "task_completed": false,
+        "outcome": "partial",
+        "needs_clarification": false,
+        "proactive_guidance": true,
+        "user_satisfaction": null,
+        "metadata": {}
+      },
+      {
+        "turn_id": 4,
+        "user_input": "多少钱？",
+        "agent_response": "您好！我看到您之前询问过游戏本的价格，但需要您提供更具体的信息才能给您准确的报价。\n\n为了帮您找到合适的价格，请问您：\n\n1. **具体是哪款游戏本**？比如您之前搜索到的某个型号\n2. **您的预算范围**是多少？\n3. **对配置有什么要求**？比如显卡、处理器、内存等\n\n或者如果您还记得之前搜索到的第一个商品，我可以帮您查询那款的具体价格信息。\n\n请告诉我更多细节，这样我就能为您提供准确的报价了！",
+        "response_time": 6.961902618408203,
+        "tool_calls_count": 0,
+        "tool_calls_names": [],
+        "task_completed": false,
+        "outcome": "partial",
+        "needs_clarification": true,
+        "proactive_guidance": false,
+        "user_satisfaction": null,
+        "metadata": {}
+      },
+      {
+        "turn_id": 5,
+        "user_input": "加入购物车",
+        "agent_response": "您好！我看到您想要将商品加入购物车。不过我需要一些信息来帮您完成这个操作：\n\n1. **商品信息**：您想要加入购物车的是哪款游戏本？请提供具体的商品名称或型号\n2. **购买数量**：您需要购买几台？\n3. **用户ID**：您的用户账号ID是多少？\n\n如果您还记得之前浏览过的商品，可以直接告诉我商品名称，我就能帮您快速加入购物车了！",
+        "response_time": 6.1109044551849365,
+        "tool_calls_count": 0,
+        "tool_calls_names": [],
+        "task_completed": false,
+        "outcome": "partial",
+        "needs_clarification": true,
+        "proactive_guidance": false,
+        "user_satisfaction": null,
+        "metadata": {}
+      }
+    ]
+  }
+}

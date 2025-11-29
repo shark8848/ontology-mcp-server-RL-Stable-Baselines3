@@ -10,6 +10,8 @@ from __future__ import annotations
 """基于 OpenAI 函数调用的轻量智能体封装，支持对话记忆。"""
 
 import json
+import yaml
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .llm_deepseek import get_default_chat_model
@@ -25,7 +27,6 @@ from .conversation_state import ConversationStateManager, ConversationStage
 from .quality_metrics import QualityMetricsTracker, TaskOutcome
 from .intent_tracker import IntentTracker
 from .recommendation_engine import RecommendationEngine
-import json
 
 # 优先使用 ChromaDB 记忆,回退到基础记忆
 try:
@@ -36,6 +37,21 @@ except ImportError:
     CHROMA_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+
+def _load_agent_config() -> Dict[str, Any]:
+    """加载 agent 配置文件"""
+    config_path = Path(__file__).parent / "config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+            if isinstance(data, dict):
+                return data
+    except Exception as exc:
+        logger.warning("无法读取 config.yaml: %s", exc)
+    return {}
 
 
 class LangChainAgent:
@@ -97,6 +113,9 @@ class LangChainAgent:
         
         # 会话ID（用于多个组件）
         self.session_id = session_id or f"session_{id(self)}"
+        
+        # 加载配置 (用于意图识别等组件)
+        self.config = _load_agent_config()
         
         # Phase 4: Prompt 管理器
         self.enable_system_prompt = enable_system_prompt

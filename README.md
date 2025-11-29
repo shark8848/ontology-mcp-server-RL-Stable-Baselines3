@@ -276,7 +276,11 @@ User: Add to cart
 AI: [commerce.add_to_cart] Added... (state: browsing → cart)
 ```
 
-### 7. Optional RL loop
+### 7. Interaction sequence diagrams
+
+日志驱动的整场会话分段图示（推荐 → 多轮搜索 → 下单支付 → 售后查询 → 统计图表）已整理在 `docs/interaction_sequence_diagrams.md`。每段对话一张子图，便于排查具体工具链路与调用时序。
+
+### 8. Optional RL loop
 - `scripts/generate_dialogue_corpus.py` for the latest 200 fully real scenarios
 - `python test_rl_modules.py` to sanity-check RL modules
 - `python train_rl_agent.py --timesteps ...` to launch PPO training

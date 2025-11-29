@@ -50,6 +50,13 @@ sequenceDiagram
 - Intent 切换在 `search` 与 `price_inquiry` 之间，Query Rewriter 采用 hybrid/broad 策略。
 - `commerce.search_products` 调用附带价格/类别过滤，FTS5 命中失败时回退到 LIKE/类别。
 
+![alt text](image-1.png)
+
+![alt text](image-2.png)
+
+![alt text](image-3.png)
+
+![alt text](image-4.png)
 ```mermaid
 sequenceDiagram
     autonumber
@@ -88,6 +95,11 @@ sequenceDiagram
 - Agent 先查看购物车，再批量调用 remove/add_to_cart，随后 create_order → process_payment。
 - Commerce Service 内部完成本体推理、SHACL 校验、库存与累计消费更新。
 
+![alt text](image-5.png)
+
+![alt text](image-6.png)
+
+![alt text](image-7.png)
 ```mermaid
 sequenceDiagram
     autonumber
@@ -139,6 +151,11 @@ sequenceDiagram
 - 用户声明“我已经支付完毕”，Agent 检查物流状态，结果因未生成发货信息返回 400。
 - 随后用户多次查询订单详情、地址、联系电话，Agent 通过 `get_user_orders` / `get_order_detail` / `get_user_profile` 获取数据。
 
+![alt text](image-8.png)
+
+![alt text](image-9.png)
+
+![alt text](image-10.png)
 ```mermaid
 sequenceDiagram
     autonumber
@@ -177,6 +194,13 @@ sequenceDiagram
 - 用户想了解“我一共有多少订单，一共消费多少钱”。
 - Agent 先查用户订单，再触发 Analytics Service 生成饼图与柱状图，并在 UI 中以 Markdown 图片展示。
 
+![alt text](image-11.png)
+
+![alt text](image-12.png)
+
+![alt text](image-13.png)
+
+![alt text](image-14.png)
 ```mermaid
 sequenceDiagram
     autonumber

@@ -215,9 +215,25 @@ class CommerceService:
         available_only: bool = True,
         limit: int = 20,
         enable_category_fallback: bool = True,
+        use_fts: bool = True,
     ) -> Dict[str, Any]:
-        """搜索商品 (支持类别回退提升召回率)"""
-        # 步骤1: 尝试关键词检索
+        """搜索商品 (支持 FTS5 全文检索 + 类别回退)
+        
+        Args:
+            keyword: 搜索关键词
+            category: 类别筛选
+            brand: 品牌筛选
+            min_price: 最低价格
+            max_price: 最高价格
+            available_only: 仅显示可用商品
+            limit: 返回结果数量限制
+            enable_category_fallback: 是否启用类别回退
+            use_fts: 是否使用 FTS5 全文检索（默认启用）
+        
+        Returns:
+            Dict[str, Any]: 包含商品列表和元数据的字典
+        """
+        # 步骤1: 尝试关键词检索（优先使用 FTS5）
         products = self.products.search_products(
             keyword=keyword,
             category=category,
@@ -226,6 +242,7 @@ class CommerceService:
             max_price=Decimal(str(max_price)) if max_price is not None else None,
             available_only=available_only,
             limit=limit,
+            use_fts=use_fts,  # 传递 FTS5 开关
         )
         
         # 步骤2: 如果结果少且启用了回退,尝试类别检索

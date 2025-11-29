@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import List, Optional, Dict, Any, Generator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, func, and_, or_
+from sqlalchemy import create_engine, func, and_, or_, case, text
 from sqlalchemy.orm import sessionmaker, Session, selectinload
 from sqlalchemy.pool import StaticPool
 
@@ -75,6 +75,63 @@ class DatabaseService:
         """删除所有表 (谨慎使用!)"""
         Base.metadata.drop_all(bind=self.engine)
         LOGGER.warning("数据库表已全部删除")
+    
+    def create_fts_table(self):
+        """创建 FTS5 全文检索虚拟表"""
+        with self.get_session() as session:
+            # 检查 FTS5 表是否已存在
+            result = session.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='products_fts'")
+            ).fetchone()
+            
+            if result:
+                LOGGER.info("FTS5 表已存在，跳过创建")
+                return
+            
+            # 创建 FTS5 虚拟表，包含中文分词支持
+            session.execute(text("""
+                CREATE VIRTUAL TABLE products_fts USING fts5(
+                    product_id UNINDEXED,
+                    product_name,
+                    category,
+                    brand,
+                    model,
+                    description,
+                    tokenize='unicode61 remove_diacritics 2'
+                )
+            """))
+            session.commit()
+            LOGGER.info("FTS5 全文检索表创建成功")
+    
+    def sync_products_to_fts(self):
+        """同步商品数据到 FTS5 表"""
+        with self.get_session() as session:
+            # 清空 FTS5 表
+            session.execute(text("DELETE FROM products_fts"))
+            
+            # 查询所有商品
+            products = session.query(Product).all()
+            
+            # 批量插入到 FTS5 表
+            for product in products:
+                session.execute(
+                    text("""
+                    INSERT INTO products_fts(
+                        product_id, product_name, category, brand, model, description
+                    ) VALUES (:pid, :pname, :cat, :brand, :model, :desc)
+                    """),
+                    {
+                        'pid': product.product_id,
+                        'pname': product.product_name or '',
+                        'cat': product.category or '',
+                        'brand': product.brand or '',
+                        'model': product.model or '',
+                        'desc': product.description or ''
+                    }
+                )
+            
+            session.commit()
+            LOGGER.info(f"已同步 {len(products)} 个商品到 FTS5 表")
     
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:
@@ -187,6 +244,27 @@ class ProductService:
             session.add(product)
             session.flush()
             product_id = product.product_id  # 在expunge前获取ID
+            
+            # 同步到 FTS5 表
+            try:
+                session.execute(
+                    text("""
+                    INSERT INTO products_fts(
+                        product_id, product_name, category, brand, model, description
+                    ) VALUES (:pid, :pname, :cat, :brand, :model, :desc)
+                    """),
+                    {
+                        'pid': product_id,
+                        'pname': product_name,
+                        'cat': category,
+                        'brand': brand,
+                        'model': model,
+                        'desc': description or ''
+                    }
+                )
+            except Exception as e:
+                LOGGER.warning(f"FTS5 同步失败: {e}")
+            
             session.expunge(product)
             LOGGER.info(f"创建商品: {product_name} (ID: {product_id})")
             return product
@@ -196,15 +274,86 @@ class ProductService:
         with self.db.get_session() as session:
             return session.query(Product).filter(Product.product_id == product_id).first()
     
+    def fts_search(self, keyword: str, limit: int = 20) -> List[int]:
+        """使用 FTS5 全文检索搜索商品，返回商品ID列表
+        
+        Args:
+            keyword: 搜索关键词
+            limit: 返回结果数量限制
+        
+        Returns:
+            List[int]: 匹配的商品ID列表
+        """
+        with self.db.get_session() as session:
+            try:
+                # 使用 FTS5 MATCH 语法进行全文检索
+                # 自动处理分词和相关性排序
+                result = session.execute(
+                    text("""
+                    SELECT product_id, rank
+                    FROM products_fts
+                    WHERE products_fts MATCH :keyword
+                    ORDER BY rank
+                    LIMIT :limit
+                    """),
+                    {'keyword': keyword, 'limit': limit}
+                ).fetchall()
+                
+                product_ids = [row[0] for row in result]
+                LOGGER.info(f"FTS5 全文检索 '{keyword}': 找到 {len(product_ids)} 个商品")
+                return product_ids
+            except Exception as e:
+                LOGGER.warning(f"FTS5 检索失败: {e}，回退到普通检索")
+                return []
+    
     def search_products(self, keyword: str = None, category: str = None,
                        brand: str = None, min_price: Decimal = None,
                        max_price: Decimal = None, available_only: bool = True,
-                       limit: int = 20) -> List[Product]:
-        """搜索商品"""
+                       limit: int = 20, use_fts: bool = True) -> List[Product]:
+        """搜索商品（支持 FTS5 全文检索）
+        
+        Args:
+            keyword: 搜索关键词
+            category: 类别筛选
+            brand: 品牌筛选
+            min_price: 最低价格
+            max_price: 最高价格
+            available_only: 仅显示可用商品
+            limit: 返回结果数量限制
+            use_fts: 是否使用 FTS5 全文检索（默认启用）
+        
+        Returns:
+            List[Product]: 商品列表
+        """
         with self.db.get_session() as session:
             query = session.query(Product)
             
-            if keyword:
+            # 如果有关键词，优先使用 FTS5 全文检索
+            if keyword and use_fts:
+                product_ids = self.fts_search(keyword, limit=limit * 2)  # 预留更多结果用于后续筛选
+                
+                if product_ids:
+                    # 使用 FTS5 结果的 ID 列表进行查询
+                    query = query.filter(Product.product_id.in_(product_ids))
+                    # 保持 FTS5 的相关性排序（使用 CASE WHEN 实现）
+                    # 创建排序映射：第一个ID排序值为0，第二个为1，以此类推
+                    order_case = case(
+                        *[(Product.product_id == pid, idx) for idx, pid in enumerate(product_ids)],
+                        else_=len(product_ids)
+                    )
+                    query = query.order_by(order_case)
+                else:
+                    # FTS5 无结果，回退到传统模糊匹配
+                    LOGGER.info(f"FTS5 无结果，回退到传统检索: '{keyword}'")
+                    query = query.filter(
+                        or_(
+                            Product.product_name.contains(keyword),
+                            Product.description.contains(keyword),
+                            Product.model.contains(keyword)
+                        )
+                    )
+            elif keyword:
+                # 未启用 FTS5 时使用传统模糊匹配
                 query = query.filter(
                     or_(
                         Product.product_name.contains(keyword),

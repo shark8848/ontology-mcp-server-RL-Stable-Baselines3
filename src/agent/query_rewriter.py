@@ -399,6 +399,10 @@ class QueryRewriter:
             elif sq["type"] == "recommendation":
                 enhanced += f'{i}. commerce.get_product_recommendations(category="{sq["category"]}", limit={sq.get("limit", 10)})\n'
         
-        enhanced += f"\n请根据以上分析,调用合适的工具返回推荐结果。"
+        enhanced += f"\n【重要】请按以下步骤操作:"
+        enhanced += f"\n1. 依次调用上述建议的工具查询商品"
+        enhanced += f"\n2. 获取工具结果后,整理出推荐的商品列表"
+        enhanced += f"\n3. 用简洁的文字总结推荐结果,包括: 商品名称、价格、特点"
+        enhanced += f"\n4. 完成推荐后请停止,不要继续调用更多工具\n"
         
         return enhanced

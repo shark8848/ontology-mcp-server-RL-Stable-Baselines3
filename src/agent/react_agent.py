@@ -70,7 +70,7 @@ class LangChainAgent:
         llm=None,
         mcp: Optional[MCPAdapter] = None,
         *,
-        max_iterations: int = 6,
+        max_iterations: int = 10,
         use_memory: bool = None,
         session_id: str = None,
         persist_directory: str = None,

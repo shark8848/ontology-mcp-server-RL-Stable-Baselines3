@@ -99,6 +99,9 @@ LOG_MAX_CHARS = _resolve_int_setting(
     _DEFAULT_LOG_MAX_CHARS,
 )
 
+# 思考过程显示配置
+SHOW_THINKING_PROCESS = True  # 全局开关
+
 _DEFAULT_STEP_SNIPPET = 500
 LOG_STEP_SNIPPET_CHARS = _resolve_int_setting(
     "EXEC_LOG_SNIPPET_CHARS",
@@ -1014,8 +1017,17 @@ def _normalize_chatbot_messages(history):
     return normalized
 
 
-def handle_user_message(user_message, chat_history=None):
-    """处理用户消息并更新 UI"""
+def handle_user_message(user_message, chat_history=None, show_thinking=True):
+    """处理用户消息并更新 UI（支持流式思考过程展示）
+    
+    Args:
+        user_message: 用户输入的消息
+        chat_history: 历史对话记录
+        show_thinking: 是否显示思考过程
+    
+    Yields:
+        tuple: 包含所有UI组件更新的元组，用于流式更新
+    """
     from datetime import datetime
     global CONVERSATION_COUNTER, PLAN_HISTORY, TOOL_CALL_HISTORY
     
@@ -1028,12 +1040,61 @@ def handle_user_message(user_message, chat_history=None):
     chart_figures: List[Any] = []
 
     try:
+        # 初始化思考内容
+        thinking_steps = []
+        
+        # 如果启用思考过程显示，先显示"正在分析..."状态
+        if show_thinking:
+            thinking_steps.append("🤔 **正在分析您的需求...**")
+            assistant_placeholder["content"] = "\n".join(thinking_steps)
+            yield (
+                gr.update(value=chat_history),
+                gr.update(),  # plan_md
+                gr.update(),  # tool_md
+                gr.update(),  # memory_md
+                gr.update(),  # ecommerce_md
+                gr.update(),  # execution_log_md
+            )
+        
+        # 运行 Agent
         res = AGENT.run(user_message)
         final = res.get("final_answer") or ""
         plan = res.get("plan") or "(no plan provided)"
         tool_calls = res.get("tool_log", [])
         charts = res.get("charts", [])
         LOGGER.info("handle_user_message: 收到 %d 个图表对象", len(charts))
+        
+        # 如果启用思考过程，展示工具调用过程
+        if show_thinking and tool_calls:
+            thinking_steps.append(f"\n🔧 **调用了 {len(tool_calls)} 个工具获取信息...**")
+            for i, tool_call in enumerate(tool_calls[:3], 1):  # 只显示前3个
+                tool_name = tool_call.get('tool', 'unknown')
+                thinking_steps.append(f"  {i}. 调用 `{tool_name}`")
+            if len(tool_calls) > 3:
+                thinking_steps.append(f"  ... 还有 {len(tool_calls) - 3} 个工具调用")
+            
+            assistant_placeholder["content"] = "\n".join(thinking_steps)
+            yield (
+                gr.update(value=chat_history),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+        
+        # 如果启用思考过程，显示"正在整理回答..."状态
+        if show_thinking:
+            thinking_steps.append("\n✨ **正在整理答案...**")
+            assistant_placeholder["content"] = "\n".join(thinking_steps)
+            yield (
+                gr.update(value=chat_history),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
         
         # 根据意图和上下文过滤图表
         filtered_charts = _filter_charts_by_intent(charts, user_message, res)
@@ -1100,7 +1161,7 @@ def handle_user_message(user_message, chat_history=None):
             context_text = "\n".join([f"> {line}" for line in ecommerce_context])
             final = f"{final}\n\n---\n**智能助手状态**\n{context_text}"
         
-        # 更新助手消息内容
+        # 更新助手消息内容（清除思考过程，只显示最终答案）
         assistant_placeholder["content"] = final
         
         # 将图表转换为图片并添加到聊天历史中
@@ -1166,7 +1227,8 @@ def handle_user_message(user_message, chat_history=None):
         ecommerce_display = f"## 🛍️ 电商分析\n\n**执行失败**: {error_msg}"
     memory_md = format_memory_context()
     
-    return (
+    # 最终返回完整结果
+    yield (
         gr.update(value=chat_history),
         gr.update(value=plan_display),
         gr.update(value=tool_display),
@@ -1515,6 +1577,14 @@ with gr.Blocks(
                 quick_btn9 = gr.Button("🧠 完整推理流程", elem_classes="quick-phrase-btn", size="sm")
                 quick_btn10 = gr.Button("📈 用户消费分析", elem_classes="quick-phrase-btn", size="sm")
             
+            # 🧠 思考过程开关
+            with gr.Row():
+                show_thinking_checkbox = gr.Checkbox(
+                    label="💭 显示思考过程",
+                    value=True,
+                    info="勾选后将实时显示 AI 的分析和工具调用过程"
+                )
+            
             with gr.Row():
                 txt = gr.Textbox(show_label=False, placeholder="在这里输入你的请求", lines=2, scale=4)
                 clear_btn = gr.Button("清空对话", variant="secondary", scale=1)
@@ -1555,8 +1625,14 @@ with gr.Blocks(
                             elem_classes="tab-content"
                         )
 
-    def submit_and_update(message, history):
-        """提交消息并更新所有面板 - 先显示用户消息，再获取回复"""
+    def submit_and_update(message, history, show_thinking):
+        """提交消息并更新所有面板 - 先显示用户消息，再获取回复
+        
+        Args:
+            message: 用户输入的消息
+            history: 聊天历史
+            show_thinking: 是否显示思考过程
+        """
         # 第一步：立即显示用户消息（Assistant回复为"思考中..."）并禁用所有按钮
         base_history = _normalize_chatbot_messages(history)
         pending_history = base_history + [
@@ -1586,81 +1662,79 @@ with gr.Blocks(
             gr.update(interactive=False),  # 禁用快捷按钮10
         )
         
-        # 第二步：调用后端获取真实回复
-        result = handle_user_message(message, base_history)
-        
-        # 第三步：返回完整结果（启用所有按钮）
-        yield (
-            result[0],  # chatbot (包含真实回复)
-            result[1],  # plan_md
-            result[2],  # tool_md
-            result[3],  # memory_md
-            result[4],  # ecommerce_md
-            result[5],  # execution_log_md
-            gr.update(value="", interactive=True),  # 启用输入框
-            gr.update(interactive=True),  # 启用发送按钮
-            gr.update(interactive=True),  # 启用快捷按钮1
-            gr.update(interactive=True),  # 启用快捷按钮2
-            gr.update(interactive=True),  # 启用快捷按钮3
-            gr.update(interactive=True),  # 启用快捷按钮4
-            gr.update(interactive=True),  # 启用快捷按钮5
-            gr.update(interactive=True),  # 启用快捷按钮6
-            gr.update(interactive=True),  # 启用快捷按钮7
-            gr.update(interactive=True),  # 启用快捷按钮8
-            gr.update(interactive=True),  # 启用快捷按钮9
-            gr.update(interactive=True),  # 启用快捷按钮10
-        )
+        # 第二步：调用后端获取真实回复（流式生成）
+        for result in handle_user_message(message, base_history, show_thinking):
+            yield (
+                result[0],  # chatbot (包含思考过程或最终回复)
+                result[1],  # plan_md
+                result[2],  # tool_md
+                result[3],  # memory_md
+                result[4],  # ecommerce_md
+                result[5],  # execution_log_md
+                gr.update(value="", interactive=True),  # 启用输入框
+                gr.update(interactive=True),  # 启用发送按钮
+                gr.update(interactive=True),  # 启用快捷按钮1
+                gr.update(interactive=True),  # 启用快捷按钮2
+                gr.update(interactive=True),  # 启用快捷按钮3
+                gr.update(interactive=True),  # 启用快捷按钮4
+                gr.update(interactive=True),  # 启用快捷按钮5
+                gr.update(interactive=True),  # 启用快捷按钮6
+                gr.update(interactive=True),  # 启用快捷按钮7
+                gr.update(interactive=True),  # 启用快捷按钮8
+                gr.update(interactive=True),  # 启用快捷按钮9
+                gr.update(interactive=True),  # 启用快捷按钮10
+            )
     
     # 🎯 快捷短语函数 - 预设测试查询（使用生成器）
-    def quick_phrase_1(history):
+    def quick_phrase_1(history, show_thinking):
         """查询用户等级推理"""
         message = "查询用户ID为1的用户等级，并解释推理过程"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_2(history):
+    def quick_phrase_2(history, show_thinking):
         """查询折扣推理"""
         message = "用户ID 1购买金额15000元，查询可用的折扣优惠，并解释推理依据"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_3(history):
+    def quick_phrase_3(history, show_thinking):
         """查询物流方案"""
         message = "查询用户ID 1的物流配送方案，包括运费和预计送达时间"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_4(history):
+    def quick_phrase_4(history, show_thinking):
         """查询退货政策"""
         message = "用户ID 1购买了AirPods Pro 2（配件类商品），已拆封但包装完好，能否退货？"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_5(history):
+    def quick_phrase_5(history, show_thinking):
         """搜索商品"""
         message = "搜索iPhone相关的商品，显示名称、价格和库存"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_6(history):
+    def quick_phrase_6(history, show_thinking):
         """创建测试订单"""
         message = "用户ID 1购买2台iPhone 15 Pro（商品ID 2），配送地址：成都武侯区，电话：15308215756"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_7(history):
+    def quick_phrase_7(history, show_thinking):
         """商品规范化测试"""
         message = "规范化查询：苹果15手机"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_8(history):
+    def quick_phrase_8(history, show_thinking):
         """SHACL校验测试"""
         message = "验证订单数据：用户ID 1，商品ID 2，数量3，地址成都，电话15308215756，是否符合SHACL规则"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_9(history):
+    def quick_phrase_9(history, show_thinking):
         """完整推理流程"""
         message = "完整演示本体推理流程：用户ID 1，订单金额20000元，包含用户等级推理、折扣计算、物流方案、SHACL校验"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
     
-    def quick_phrase_10(history):
+    def quick_phrase_10(history, show_thinking):
         """用户消费分析"""
         message = "分析用户ID 1的消费情况，包括累计消费、等级变化和推荐策略"
-        yield from submit_and_update(message, history)
+        yield from submit_and_update(message, history, show_thinking)
 
     # 绑定事件 - 输出包含所有需要更新的组件
     outputs = [
@@ -1670,21 +1744,21 @@ with gr.Blocks(
         quick_btn6, quick_btn7, quick_btn8, quick_btn9, quick_btn10
     ]
     
-    submit.click(submit_and_update, [txt, chatbot], outputs)
-    txt.submit(submit_and_update, [txt, chatbot], outputs)
+    submit.click(submit_and_update, [txt, chatbot, show_thinking_checkbox], outputs)
+    txt.submit(submit_and_update, [txt, chatbot, show_thinking_checkbox], outputs)
     clear_btn.click(clear_conversation, None, [chatbot, plan_md, tool_md, memory_md, ecommerce_md, execution_log_md])
     
     # 🎯 绑定快捷按钮事件
-    quick_btn1.click(quick_phrase_1, [chatbot], outputs)
-    quick_btn2.click(quick_phrase_2, [chatbot], outputs)
-    quick_btn3.click(quick_phrase_3, [chatbot], outputs)
-    quick_btn4.click(quick_phrase_4, [chatbot], outputs)
-    quick_btn5.click(quick_phrase_5, [chatbot], outputs)
-    quick_btn6.click(quick_phrase_6, [chatbot], outputs)
-    quick_btn7.click(quick_phrase_7, [chatbot], outputs)
-    quick_btn8.click(quick_phrase_8, [chatbot], outputs)
-    quick_btn9.click(quick_phrase_9, [chatbot], outputs)
-    quick_btn10.click(quick_phrase_10, [chatbot], outputs)
+    quick_btn1.click(quick_phrase_1, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn2.click(quick_phrase_2, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn3.click(quick_phrase_3, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn4.click(quick_phrase_4, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn5.click(quick_phrase_5, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn6.click(quick_phrase_6, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn7.click(quick_phrase_7, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn8.click(quick_phrase_8, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn9.click(quick_phrase_9, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn10.click(quick_phrase_10, [chatbot, show_thinking_checkbox], outputs)
 
 
 def _env_flag(name: str) -> bool:

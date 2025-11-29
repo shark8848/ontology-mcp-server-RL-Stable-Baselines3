@@ -1332,8 +1332,16 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 
 ### 2025-11-29
 
+**⚡ 真流式对话链路**
+- `react_agent.py` 新增 `run_stream` 生成器，LLM 适配器输出 token delta，Gradio UI 支持逐 token 渲染“思考过程 + 最终回答”。
+
+**🔍 检索与意图体系**
+- 配置化多策略意图识别（LLM/Embedding/规则权衡）正式启用。
+- `query_rewriter.py` 通过 LLM 理解 + 类别/同义词映射为泛化查询生成多关键词组合。
+- `db_service.py`/`commerce_service.py` 引入 FTS5 全文检索 + LIKE + 类别回退的混合策略，显著提升“电子产品”等宽泛请求的命中率。
+
 **📘 交互时序图文档**
-- 新增 [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md)，以日志为唯一数据源，输出 5 段对话的 Mermaid 时序图与 PNG 截图（推荐 → 多轮检索 → 下单支付 → 售后查询 → 统计图表）。
+- 新增 [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md)，以日志为唯一数据源，输出 5 段对话的 Mermaid 时序图与 PNG 截图（推荐 → 多轮检索 → 下单支付 → 售后 → 统计图表）。
 - README 中英文版本均加入链接，方便直接跳转到完整调用链说明。
 - 以标签 **v1.5.2** 保存当前基线，便于后续 RL/MCP 迭代对照。
 
@@ -1581,9 +1589,10 @@ test_shacl_validation_detects_violations PASSED ✅
 ### v1.5.2 (2025-11-29) - 最新基线 ✅
 
 **核心亮点**:
-- 📘 `docs/interaction_sequence_diagrams.md` 收录 5 段对话的 Mermaid 时序图与 PNG 截图，可复盘“推荐 → 多轮检索 → 下单支付 → 售后 → 统计图表”的完整链路。
-- 📚 README 中英文双版本新增链接，快速跳转至上述文档，便于排查日志与 UI 证据。
-- 🏷️ 创建标签 `v1.5.2` 作为当前稳定基线，方便后续 RL/MCP 增强版本对比。
+- ⚡ **真流式对话链路**：`react_agent.py` 引入 `run_stream` 生成器，DeepSeek 适配器逐 token 输出，Gradio UI 同步渲染“思考过程 + 最终答复”。
+- 🔍 **检索准确度提升**：多策略意图识别（LLM + Embedding + 规则）、LLM 查询改写器以及 FTS5 + LIKE + 类别回退的混合检索链，让“电子产品”这类泛化请求也能返回命中商品。
+- 📘 **交互时序图文档**：[`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md) 收录 5 段对话的 Mermaid 时序图与 PNG 截图，可复盘“推荐 → 多轮检索 → 下单支付 → 售后 → 统计图表”的完整链路；README 中英文均已加上跳转链接。
+- 🏷️ **基线标签**：创建 `v1.5.2`，作为后续 RL / MCP 增量的比对参考。
 
 **下载方式**:
 
@@ -1625,7 +1634,7 @@ git clone https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.
 
 | 版本 | 日期 | 亮点 | 获取方式 |
 |------|------|------|-----------|
-| **v1.5.2** | 2025-11-29 | 交互时序图文档、README 交叉引用、基线标签 | `git checkout v1.5.2` |
+| **v1.5.2** | 2025-11-29 | 真流式链路、意图/检索升级、日志驱动时序图 + 基线标签 | `git checkout v1.5.2` |
 | **v1.5.1** | 2025-11-23 | 图表流式渲染、Analytics MCP 工具、训练控制台优化 | `git checkout v1.5.1` |
 | **v1.5.0** | 2025-11-20 | RL 闭环、Docker/Compose、五页 Gradio UI | `git checkout v1.5.0` |
 | **v1.0.0** | 2025-10 | Phase 1-3 基础版本（本体+工具+Agent） | `git checkout v1.0.0` |

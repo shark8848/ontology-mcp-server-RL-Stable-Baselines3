@@ -1,6 +1,6 @@
 # Ontology RL Commerce Agent
 
-[English](README.md) | [简体中文](README.zh.md)
+[English](README.md) | [Simplified Chinese](README.zh.md)
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -115,15 +115,15 @@ python scripts/update_demo_user_names.py --seed 2025
 
 | User ID | Name | Email | Tier | Lifetime Spend |
 |---------|------|-------|------|----------------|
-| 1 | 张三 | zhangsan@example.com | Regular | ¥0 |
-| 2 | 李四 | lisi@example.com | VIP | ¥6,500 |
-| 3 | 王五 | wangwu@example.com | SVIP | ¥12,000 |
+| 1 | Zhang San | zhangsan@example.com | Regular | CNY 0 |
+| 2 | Li Si | lisi@example.com | VIP | CNY 6,500 |
+| 3 | Wang Wu | wangwu@example.com | SVIP | CNY 12,000 |
 
 **Sample products**
-- iPhone 15 Pro Max (¥9,999)
-- iPhone 15 Pro (¥8,999)
-- iPhone 15 (¥5,999)
-- AirPods Pro 2 (¥1,899)
+- iPhone 15 Pro Max (CNY 9,999)
+- iPhone 15 Pro (CNY 8,999)
+- iPhone 15 (CNY 5,999)
+- AirPods Pro 2 (CNY 1,899)
 - Accessories, etc.
 
 #### 3. Configure the LLM
@@ -278,7 +278,7 @@ AI: [commerce.add_to_cart] Added... (state: browsing → cart)
 
 ### 7. Interaction sequence diagrams
 
-日志驱动的整场会话分段图示（推荐 → 多轮搜索 → 下单支付 → 售后查询 → 统计图表）已整理在 [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md)。文档内为每轮对话提供一张 Mermaid 时序图以及对应的截图（PNG），可快速对照日志、工具链路与 UI 呈现效果。
+Log-driven segments for the full conversation (recommendation → multi-search → checkout → after-sales → analytics) live in [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md). Each section contains a Mermaid sequence diagram plus a PNG snapshot so you can line up raw logs, tool invocations, and the UI states.
 
 ### 8. Optional RL loop
 - `scripts/generate_dialogue_corpus.py` for the latest 200 fully real scenarios
@@ -358,7 +358,7 @@ curl -X POST http://localhost:8000/invoke \
 
 3. **System Prompts** (`prompts.py`)
    - Ecommerce persona: professional, friendly shopping advisor
-   - Uses "您" tone in Chinese prompts; avoids system jargon
+   - Uses a polite "nin" tone when generating Chinese prompts; avoids system jargon
    - Confirms risky operations (payment, cancellation)
    - Encourages clarifying questions instead of immediate refusal
 
@@ -484,63 +484,63 @@ The system defines **12 core business entities** with complete relationships and
 
 #### Core Transaction Entities
 
-1. **User** (用户)
+1. **User**
    - Properties: user_id, username, email, phone, user_level (Regular/VIP/SVIP), total_spent, credit_score
    - Operations: Query user, User authentication
    - Relationships: Creates orders, owns cart items, initiates support tickets
 
-2. **Product** (商品)
+2. **Product**
    - Properties: product_id, product_name, category, brand, model, price, stock_quantity, specs
    - Operations: Search products, Get product details, Check stock, Get recommendations, Get reviews
    - Relationships: Referenced by cart items, order items, and reviews
 
-3. **CartItem** (购物车项)
+3. **CartItem**
    - Properties: cart_id, user_id, product_id, quantity, added_at
    - Operations: Add to cart, View cart, Remove from cart
    - Relationships: Links users to products
 
-4. **Order** (订单)
+4. **Order**
    - Properties: order_id, order_no, total_amount, discount_amount, final_amount, order_status, payment_status
    - Operations: Create order, Get order details, Cancel order, Get user orders
    - Relationships: Contains order items, generates payment and shipment records
    - **Ontology Inference**: Discount amount calculated by ontology rules based on user level, order amount, and first-order status
 
-5. **OrderItem** (订单明细)
+5. **OrderItem**
    - Properties: item_id, order_id, product_id, product_name, quantity, unit_price, subtotal
    - Relationships: Order contains multiple order items, each referencing a product
 
-6. **Payment** (支付单)
+6. **Payment**
    - Properties: payment_id, order_id, payment_method, payment_amount, payment_status, transaction_id, payment_time
    - Operations: Process payment
    - Relationships: Generated from orders
    - **Note**: Transaction_id serves as payment receipt
 
-7. **Shipment** (物流单)
+7. **Shipment**
    - Properties: shipment_id, order_id, tracking_no, carrier, current_status, current_location, estimated_delivery
    - Operations: Track shipment, Get shipment status
    - Relationships: Generated from orders, records shipment tracks
 
-8. **ShipmentTrack** (物流轨迹)
+8. **ShipmentTrack**
    - Properties: track_id, shipment_id, status, location, description, track_time
    - Relationships: Multiple tracks belong to one shipment
 
 #### Customer Service & After-sales Entities
 
-9. **SupportTicket** (客服工单)
+9. **SupportTicket**
    - Properties: ticket_id, ticket_no, user_id, order_id, category, priority, status, subject, description
    - Operations: Create support ticket
    - Relationships: Created by users for orders, contains support messages
 
-10. **SupportMessage** (客服消息)
+10. **SupportMessage**
     - Properties: message_id, ticket_id, sender_type, sender_id, message_content, sent_at
     - Relationships: Multiple messages belong to one support ticket
 
-11. **Return** (退换货)
+11. **Return**
     - Properties: return_id, return_no, order_id, user_id, return_type (return/exchange), reason, status, refund_amount
     - Operations: Process return
     - Relationships: Initiated from orders
 
-12. **Review** (商品评价)
+12. **Review**
     - Properties: review_id, product_id, user_id, order_id, rating (1-5 stars), content, images
     - Operations: Get product reviews
     - Relationships: Users review products
@@ -590,11 +590,11 @@ The system defines **12 core business entities** with complete relationships and
 ### Shipping rules (5)
 | Rule | Trigger | Shipping | Method |
 |------|---------|----------|--------|
-| FreeShipping500Rule | Order ≥ 500 | ¥0 standard | `infer_shipping()` |
-| VIPFreeShippingRule | VIP/SVIP | ¥0 standard | `infer_shipping()` |
-| SVIPNextDayDeliveryRule | SVIP | ¥0 next-day | `infer_shipping()` |
-| StandardShippingRule | Regular < 500 | ¥15 standard | `infer_shipping()` |
-| RemoteAreaShippingRule | Remote address | +¥30 | `infer_shipping()` |
+| FreeShipping500Rule | Order ≥ 500 | CNY 0 standard | `infer_shipping()` |
+| VIPFreeShippingRule | VIP/SVIP | CNY 0 standard | `infer_shipping()` |
+| SVIPNextDayDeliveryRule | SVIP | CNY 0 next-day | `infer_shipping()` |
+| StandardShippingRule | Regular < 500 | CNY 15 standard | `infer_shipping()` |
+| RemoteAreaShippingRule | Remote address | +CNY 30 | `infer_shipping()` |
 
 ### Return/exchange rules (5)
 | Rule | Scope | Window | Extra conditions |
@@ -729,9 +729,9 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 ## 🏷️ Release Highlights
 
 ### v1.5.2 (2025-11-29) — Streaming Trace Baseline ✅
-- Introduced [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md) with log-sourced Mermaid diagrams plus PNG snapshots for each conversation turn (recommendation → multi-search → checkout → after-sales → analytics).
-- Linked the new documentation from both `README.md` and `README.zh.md`, clarifying how to replay the complete call chain and correlate UI evidence.
-- Captured the current state as tag `v1.5.2`, establishing a clean baseline for future RL or MCP upgrades.
+- **True streaming pipeline**: `react_agent.py` now exposes generator-based `run_stream`, DeepSeek adapter emits token deltas, and the Gradio UI renders thoughts + final answers token-by-token (commits 505b39e → 7c99e84 → aab0956).
+- **Search accuracy upgrades**: configurable multi-strategy intent tracker, LLM-powered query rewriter, FTS5 full-text index + hybrid fallback (FTS5 → LIKE → category) dramatically improve generic queries such as "electronic products".
+- **Traceability tooling**: [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md) records each conversation turn with Mermaid diagrams + PNG evidence (recommendation → multi-search → checkout → after-sales → analytics) and both READMEs now point to it. Tag `v1.5.2` marks this baseline for downstream RL experiments.
 
 ### v1.5.1 (2025-11-23)
 - Inline charts (Markdown + Base64 PNG) with intent/user-context metadata and `_filter_charts_by_intent()` privacy guard.
@@ -771,7 +771,7 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 
 | Version | Date | Highlights | Download |
 |---------|------|------------|-----------|
-| **v1.5.2** | 2025-11-29 | Sequence-diagram documentation + PNG evidence, README cross-links, new baseline tag | `git checkout v1.5.2` |
+| **v1.5.2** | 2025-11-29 | Streaming generator pipeline, intent/query/search upgrades, log-driven diagrams + baseline tag | `git checkout v1.5.2` |
 | **v1.5.1** | 2025-11-23 | Inline chart streaming, analytics MCP tool, dashboard UX upgrades | `git checkout v1.5.1` |
 | **v1.5.0** | 2025-11-20 | RL closed loop, Docker/Compose packaging, 5-tab Gradio UI | `git checkout v1.5.0` |
 | **v1.0.0** | 2025-10 | Phase 1-3 baseline (ontology + tools + agent) | `git checkout v1.0.0` |
@@ -779,10 +779,11 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 ## 📝 Changelog
 
 ### 2025-11-29
-- Added log-driven interaction sequence diagrams (Mermaid + PNG), referenced by both English/Chinese READMEs.
-- Tagged release **v1.5.2** as the latest baseline snapshot.
+- **True streaming loop**: `react_agent.py` now exposes generator-based `run_stream`, the DeepSeek adapter emits token deltas, and the Gradio UI renders thoughts + final answers token-by-token for transparent reasoning playback.
+- **Intent + retrieval stack**: Configurable multi-strategy intent tracker, LLM-driven `query_rewriter.py`, and the FTS5→LIKE→category fallback in `commerce_service.py`/`db_service.py` greatly improve broad queries such as "electronic products" while preserving recall for niche intents.
+- **Traceable documentation**: [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md) captures five log-sourced sequences with Mermaid + PNG evidence, READMEs link to it, and tag **v1.5.2** marks the new baseline in the version history table.
 
-See [README.zh.md](README.zh.md#-更新日志) for the detailed Chinese changelog (mirrors the English highlights above).
+See [README.zh.md](README.zh.md) for the detailed Chinese changelog (mirrors the English highlights above).
 
 ## 🙏 Acknowledgments
 
@@ -796,7 +797,7 @@ See [README.zh.md](README.zh.md#-更新日志) for the detailed Chinese changelo
 
 ## 🧩 Case Study
 
-- **Scenario**: VIP buyer with a ¥200k budget asks the agent to “spend it all” on the most expensive phones, covering insights → recommendations → cart → payment → after-sales tracking.
+- **Scenario**: VIP buyer with a CNY 200k budget asks the agent to “spend it all” on the most expensive phones, covering insights → recommendations → cart → payment → after-sales tracking.
 - **Highlights**: 16-step memory chain, 22 MCP tools (6 ontology calls, 2 SHACL checks), dynamic charts, automated VIP discounting, cart + checkout orchestration.
 - **Full walk-through**: [`docs/VIP_Customer_Case.md`](docs/VIP_Customer_Case.md).
 

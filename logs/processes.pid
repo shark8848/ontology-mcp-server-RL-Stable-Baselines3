@@ -1,6 +1,4 @@
-ontology_server 82516
-agent_ui 120802
-agent_ui 121195
-agent_ui 123963
-agent_ui 124872
-ontology_server 138659
+ontology_server 50360
+agent_ui 50368
+training_dashboard 50376
+tensorboard 50385

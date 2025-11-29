@@ -124,8 +124,12 @@ class LangChainAgent:
         self.enable_intent_tracking = enable_intent_tracking
         self.intent_tracker: Optional[IntentTracker] = None
         if enable_intent_tracking:
-            self.intent_tracker = IntentTracker(session_id=self.session_id)
-            logger.info("已启用意图识别跟踪")
+            # 初始化混合意图识别器
+            from .intent_tracker import HybridIntentRecognizer
+            intent_config = self.config.get("intent_recognition", {})
+            recognizer = HybridIntentRecognizer(llm=llm, config=intent_config)
+            self.intent_tracker = IntentTracker(session_id=self.session_id, recognizer=recognizer)
+            logger.info("已启用意图识别跟踪 (混合策略)")
         
         # Phase 4 优化: 推荐引擎
         self.enable_recommendation = enable_recommendation

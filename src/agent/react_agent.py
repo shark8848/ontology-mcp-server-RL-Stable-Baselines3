@@ -156,6 +156,14 @@ class LangChainAgent:
         if enable_recommendation:
             self.recommendation_engine = RecommendationEngine()
             logger.info("已启用个性化推荐引擎")
+        
+        # Phase 5: 查询改写器
+        from .query_rewriter import QueryRewriter
+        query_rewriter_config = self.config.get("query_rewriter", {})
+        self.query_rewriter: Optional[QueryRewriter] = None
+        if query_rewriter_config.get("enabled", True):
+            self.query_rewriter = QueryRewriter(llm=self.llm, config=query_rewriter_config)
+            logger.info("已启用查询改写器")
 
         # 强制本体/SHACL 校验相关状态
         self._pending_validation: Optional[Dict[str, Any]] = None
@@ -400,6 +408,20 @@ class LangChainAgent:
             current_intent = self.intent_tracker.track_intent(user_input, turn_id)
             logger.info(f"识别意图: {current_intent.category.value} (置信度: {current_intent.confidence:.2f})")
         
+        # Phase 5: 查询改写 (针对推荐意图)
+        enhanced_input = user_input
+        rewritten_query = None
+        from .intent_tracker import IntentCategory
+        if (self.query_rewriter and current_intent and 
+            current_intent.category in [IntentCategory.RECOMMENDATION, IntentCategory.SEARCH]):
+            try:
+                rewritten_query = self.query_rewriter.rewrite(user_input, current_intent)
+                enhanced_input = self.query_rewriter.format_enhanced_prompt(user_input, rewritten_query)
+                logger.info(f"查询已改写: 类别={rewritten_query.category}, 关键词={rewritten_query.keywords[:3]}")
+            except Exception as e:
+                logger.error(f"查询改写失败: {e}, 使用原始查询")
+                enhanced_input = user_input
+        
         # 初始化执行日志
         execution_log = []
         
@@ -416,6 +438,18 @@ class LangChainAgent:
 
         # 记录用户输入
         add_log("user_input", user_input, {})
+        
+        # 记录查询改写结果
+        if rewritten_query:
+            add_log("query_rewrite", {
+                "original": user_input,
+                "understood_intent": rewritten_query.understood_intent,
+                "category": rewritten_query.category,
+                "keywords": rewritten_query.keywords,
+                "expanded_keywords": rewritten_query.expanded_keywords[:10],
+                "strategy": rewritten_query.search_strategy,
+                "confidence": rewritten_query.confidence
+            }, {"reasoning": rewritten_query.reasoning})
 
         # 注入对话历史上下文
         context_prefix = ""
@@ -471,20 +505,29 @@ class LangChainAgent:
                 "prompt_length": len(system_prompt)
             })
         
-        # 构建用户消息（可能包含历史上下文）
+        # 构建用户消息（可能包含历史上下文 + 查询改写）
         if context_prefix:
             if self.prompt_manager:
-                enhanced_input = self.prompt_manager.build_user_message(user_input, context_prefix)
+                # 如果有查询改写,使用改写后的输入
+                base_message = enhanced_input if rewritten_query else user_input
+                final_input = self.prompt_manager.build_user_message(base_message, context_prefix)
             else:
-                enhanced_input = f"{context_prefix}\n\n# 当前用户问题\n{user_input}"
-            messages.append({"role": "user", "content": enhanced_input})
-            add_log("enhanced_prompt", enhanced_input, {
+                base_message = enhanced_input if rewritten_query else user_input
+                final_input = f"{context_prefix}\n\n# 当前用户问题\n{base_message}"
+            messages.append({"role": "user", "content": final_input})
+            add_log("enhanced_prompt", final_input, {
                 "has_context": True,
+                "has_rewrite": rewritten_query is not None,
                 "context_length": len(context_prefix)
             })
         else:
-            messages.append({"role": "user", "content": user_input})
-            add_log("enhanced_prompt", user_input, {"has_context": False})
+            # 使用查询改写后的输入(如果有)
+            final_input = enhanced_input if rewritten_query else user_input
+            messages.append({"role": "user", "content": final_input})
+            add_log("enhanced_prompt", final_input, {
+                "has_context": False,
+                "has_rewrite": rewritten_query is not None
+            })
         
         tool_log: List[Dict[str, Any]] = []
         plan_lines: List[str] = []

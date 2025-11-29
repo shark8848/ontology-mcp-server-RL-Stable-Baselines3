@@ -214,7 +214,10 @@ class CommerceService:
         max_price: Optional[float] = None,
         available_only: bool = True,
         limit: int = 20,
+        enable_category_fallback: bool = True,
     ) -> Dict[str, Any]:
+        """搜索商品 (支持类别回退提升召回率)"""
+        # 步骤1: 尝试关键词检索
         products = self.products.search_products(
             keyword=keyword,
             category=category,
@@ -224,6 +227,43 @@ class CommerceService:
             available_only=available_only,
             limit=limit,
         )
+        
+        # 步骤2: 如果结果少且启用了回退,尝试类别检索
+        if enable_category_fallback and len(products) < 5 and keyword and not category:
+            # 导入类别映射表
+            try:
+                from src.agent.query_rewriter import QueryRewriter
+                CATEGORY_SEARCH_MAP = QueryRewriter.CATEGORY_SEARCH_MAP
+            except ImportError:
+                CATEGORY_SEARCH_MAP = {}
+            
+            if keyword in CATEGORY_SEARCH_MAP:
+                target_categories = CATEGORY_SEARCH_MAP[keyword]
+                LOGGER.info(f"关键词 '{keyword}' 匹配较少({len(products)}个),回退到类别检索: {target_categories}")
+                
+                for target_cat in target_categories:
+                    fallback_products = self.products.search_products(
+                        keyword=None,  # 清空关键词,只用类别
+                        category=target_cat,
+                        brand=brand,
+                        min_price=Decimal(str(min_price)) if min_price is not None else None,
+                        max_price=Decimal(str(max_price)) if max_price is not None else None,
+                        available_only=available_only,
+                        limit=max(limit // len(target_categories), 5),  # 每个类别至少5个
+                    )
+                    products.extend(fallback_products)
+                
+                # 去重 (based on product_id)
+                seen = set()
+                unique_products = []
+                for p in products:
+                    if p.product_id not in seen:
+                        seen.add(p.product_id)
+                        unique_products.append(p)
+                products = unique_products[:limit]
+                
+                LOGGER.info(f"类别回退后共找到 {len(products)} 个商品")
+        
         return {
             "total": len(products),
             "items": [product.to_dict() for product in products],

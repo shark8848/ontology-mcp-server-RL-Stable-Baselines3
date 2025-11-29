@@ -126,9 +126,14 @@ class IntentRecognizer:
             r"加购|加入购物车|放进|买这个",
             r"add.*cart|buy",
         ],
+        # 推荐意图 - 提高优先级，放在 VIEW_CART 之前
+        IntentCategory.RECOMMENDATION: [
+            r"推荐|建议|什么好|帮我选|有什么.*推荐|什么.*产品|什么.*好|好的.*推荐|有哪些.*推荐",
+            r"recommend|suggest|best|what.*good|any.*recommendation",
+        ],
         IntentCategory.VIEW_CART: [
-            r"购物车|看看购物车|有什么",
-            r"cart|shopping.*cart",
+            r"购物车里|看看购物车|购物车.*有|我的购物车",
+            r"cart|shopping.*cart|my.*cart",
         ],
         IntentCategory.CHECKOUT: [
             r"下单|结账|支付|购买|确认订单",
@@ -145,10 +150,6 @@ class IntentRecognizer:
         IntentCategory.VIP_INQUIRY: [
             r"会员|vip|升级|权益",
             r"vip|member|premium",
-        ],
-        IntentCategory.RECOMMENDATION: [
-            r"推荐|建议|什么好|帮我选",
-            r"recommend|suggest|best",
         ],
         IntentCategory.CHART_REQUEST: [
             r"趋势图|柱状图|饼状图|折线图|图表|统计图|可视化|对比图",

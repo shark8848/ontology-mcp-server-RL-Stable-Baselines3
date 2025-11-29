@@ -1123,9 +1123,23 @@ def handle_user_message(user_message, chat_history=None, show_thinking=True):
                             gr.update(),
                         )
                 
-                elif step_type == "finalizing":
-                    thinking_steps.append(f"\n✨ **{content}**")
+                elif step_type == "llm_streaming_start":
+                    thinking_steps.append(f"\n💬 **{content}**")
                     assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
+                
+                elif step_type == "llm_streaming":
+                    # 逐 token 流式输出（追加到思考步骤之后）
+                    accumulated = metadata.get("accumulated", "")
+                    # 清除之前的思考步骤，只保留累积的答案
+                    assistant_placeholder["content"] = accumulated
                     yield (
                         gr.update(value=chat_history),
                         gr.update(),

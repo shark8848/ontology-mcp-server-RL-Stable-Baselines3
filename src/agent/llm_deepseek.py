@@ -140,6 +140,7 @@ class DeepseekChatModel:
         *,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        """同步生成（非流式）"""
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -200,6 +201,99 @@ class DeepseekChatModel:
             "tool_calls": tool_calls,
             "raw_response": response,
         }
+    
+    def generate_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ):
+        """流式生成，逐 token yield 内容
+        
+        Yields:
+            Dict[str, Any]: 包含以下字段
+            - delta_content: 本次新增的文本片段
+            - accumulated_content: 累积的完整文本
+            - tool_calls: 工具调用列表（仅在完成时返回）
+            - finish_reason: 完成原因（仅在完成时返回）
+        """
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,  # 启用流式
+        }
+        if tools:
+            kwargs["tools"] = tools
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
+
+        try:
+            stream = self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            logger.error(
+                f"LLM 流式 API 调用失败: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            raise
+        
+        accumulated_content = ""
+        tool_calls_data = []
+        
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            
+            choice = chunk.choices[0]
+            delta = choice.delta
+            
+            # 处理文本内容增量
+            if hasattr(delta, 'content') and delta.content:
+                delta_text = delta.content
+                accumulated_content += delta_text
+                yield {
+                    "delta_content": delta_text,
+                    "accumulated_content": accumulated_content,
+                    "tool_calls": [],
+                    "finish_reason": None,
+                }
+            
+            # 处理工具调用（流式模式下通常在最后返回）
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                for tool_call in delta.tool_calls:
+                    if tool_call.index >= len(tool_calls_data):
+                        tool_calls_data.append({
+                            "id": tool_call.id or "",
+                            "name": tool_call.function.name if hasattr(tool_call.function, 'name') else "",
+                            "arguments": ""
+                        })
+                    
+                    if hasattr(tool_call.function, 'arguments'):
+                        tool_calls_data[tool_call.index]["arguments"] += tool_call.function.arguments or ""
+            
+            # 检查是否完成
+            if choice.finish_reason:
+                # 解析工具调用参数
+                parsed_tool_calls = []
+                for tc in tool_calls_data:
+                    try:
+                        args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw": tc["arguments"]}
+                    
+                    parsed_tool_calls.append({
+                        "id": tc["id"],
+                        "name": tc["name"],
+                        "arguments": args,
+                    })
+                
+                yield {
+                    "delta_content": "",
+                    "accumulated_content": accumulated_content,
+                    "tool_calls": parsed_tool_calls,
+                    "finish_reason": choice.finish_reason,
+                }
 
 
 def build_chat_model(

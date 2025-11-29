@@ -1199,7 +1199,7 @@ class LangChainAgent:
         return state.stage.value if state else None
     
     def run_stream(self, user_input: str):
-        """流式执行 Agent 推理循环，实时yield每个关键步骤
+        """真流式执行 Agent 推理循环，逐 token 输出最终答案
         
         Args:
             user_input: 用户输入
@@ -1207,7 +1207,7 @@ class LangChainAgent:
         Yields:
             Dict[str, Any]: 包含步骤类型和内容的字典
             - step_type: 'thinking_start', 'intent_recognized', 'query_rewritten', 
-                        'tool_calling', 'tool_result', 'final_answer' 等
+                        'tool_calling', 'tool_result', 'llm_streaming', 'final_answer' 等
             - content: 相应的内容
             - metadata: 额外的元数据
         """
@@ -1254,15 +1254,15 @@ class LangChainAgent:
             except Exception as e:
                 logger.error(f"查询改写失败: {e}")
         
-        # 步骤4: 调用原始run方法获取完整结果
-        # 这里yield工具调用过程
+        # 步骤4: 执行完整推理（使用原run方法获取工具调用）
+        # 但将最后一轮LLM调用改为流式
         yield {
             "step_type": "tool_calling_start",
             "content": "正在调用工具获取信息...",
             "metadata": {}
         }
         
-        # 调用原始run方法
+        # 先执行完整推理获取工具调用和上下文
         result = self.run(user_input)
         
         # 步骤5: 报告工具调用结果
@@ -1278,21 +1278,80 @@ class LangChainAgent:
                 }
             }
         
-        # 步骤6: 整理答案
+        # 步骤6: 流式生成最终答案
         yield {
-            "step_type": "finalizing",
-            "content": "正在整理答案...",
+            "step_type": "llm_streaming_start",
+            "content": "正在生成答案...",
             "metadata": {}
         }
         
-        # 步骤7: 返回最终结果
-        yield {
-            "step_type": "final_answer",
-            "content": result.get("final_answer", ""),
-            "metadata": {
-                "full_result": result
+        # 检查 LLM 是否支持流式生成
+        if hasattr(self.llm, 'generate_stream'):
+            # 使用工具调用后的消息历史，让LLM生成最终总结
+            messages = result.get("raw_messages", [])
+            
+            # 如果消息历史为空或最后不是工具结果，使用已有的final_answer
+            if not messages or messages[-1].get("role") != "tool":
+                yield {
+                    "step_type": "final_answer",
+                    "content": result.get("final_answer", ""),
+                    "metadata": {
+                        "full_result": result,
+                        "streaming": False
+                    }
+                }
+            else:
+                # 流式生成最终答案
+                try:
+                    accumulated_answer = ""
+                    for chunk in self.llm.generate_stream(messages, tools=None):
+                        delta = chunk.get("delta_content", "")
+                        accumulated_answer = chunk.get("accumulated_content", "")
+                        
+                        if delta:  # 有新内容时才yield
+                            yield {
+                                "step_type": "llm_streaming",
+                                "content": delta,
+                                "metadata": {
+                                    "accumulated": accumulated_answer
+                                }
+                            }
+                        
+                        # 检查是否完成
+                        if chunk.get("finish_reason"):
+                            # 更新result中的final_answer
+                            result["final_answer"] = accumulated_answer
+                            yield {
+                                "step_type": "final_answer",
+                                "content": accumulated_answer,
+                                "metadata": {
+                                    "full_result": result,
+                                    "streaming": True
+                                }
+                            }
+                            break
+                except Exception as e:
+                    logger.error(f"LLM 流式生成失败: {e}，回退到非流式", exc_info=True)
+                    # 失败时使用已有的final_answer
+                    yield {
+                        "step_type": "final_answer",
+                        "content": result.get("final_answer", ""),
+                        "metadata": {
+                            "full_result": result,
+                            "streaming": False,
+                            "error": str(e)
+                        }
+                    }
+        else:
+            # LLM 不支持流式，直接返回结果
+            yield {
+                "step_type": "final_answer",
+                "content": result.get("final_answer", ""),
+                "metadata": {
+                    "full_result": result,
+                    "streaming": False
+                }
             }
-        }
 
 
 # 保持旧名称兼容

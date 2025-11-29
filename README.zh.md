@@ -821,6 +821,96 @@ result = ontology.infer_order_details(
 - 推理步骤追踪
 - 错误堆栈信息
 
+## 🏗️ 本体与架构
+
+### 本体语义模型
+
+系统定义了 **12 个核心业务实体**，具有完整的关系和属性：
+
+#### 核心交易实体
+
+1. **User（用户）**
+   - 属性：user_id（用户ID）、username（用户名）、email（邮箱）、phone（电话）、user_level（会员等级：Regular/VIP/SVIP）、total_spent（累计消费）、credit_score（信用分）
+   - 操作：查询用户、用户认证
+   - 关系：创建订单、拥有购物车项、发起客服工单
+
+2. **Product（商品）**
+   - 属性：product_id（商品ID）、product_name（商品名称）、category（类别）、brand（品牌）、model（型号）、price（价格）、stock_quantity（库存数量）、specs（规格参数）
+   - 操作：商品搜索、获取商品详情、检查库存、商品推荐、获取评价
+   - 关系：被购物车项、订单明细、商品评价引用
+
+3. **CartItem（购物车项）**
+   - 属性：cart_id（购物车ID）、user_id（用户ID）、product_id（商品ID）、quantity（数量）、added_at（添加时间）
+   - 操作：加入购物车、查看购物车、从购物车移除
+   - 关系：连接用户与商品
+
+4. **Order（订单）**
+   - 属性：order_id（订单ID）、order_no（订单编号）、total_amount（商品总额）、discount_amount（折扣金额）、final_amount（最终应付金额）、order_status（订单状态）、payment_status（支付状态）
+   - 操作：创建订单、获取订单详情、取消订单、获取用户订单列表
+   - 关系：包含订单明细、生成支付单和物流单
+   - **本体推理**：折扣金额由本体规则根据用户等级、订单金额、是否首单等推理计算
+
+5. **OrderItem（订单明细）**
+   - 属性：item_id（明细ID）、order_id（订单ID）、product_id（商品ID）、product_name（商品名称）、quantity（数量）、unit_price（单价）、subtotal（小计）
+   - 关系：订单包含多个订单明细，每个明细引用一个商品
+
+6. **Payment（支付单）**
+   - 属性：payment_id（支付ID）、order_id（订单ID）、payment_method（支付方式）、payment_amount（支付金额）、payment_status（支付状态）、transaction_id（交易流水号）、payment_time（支付时间）
+   - 操作：处理支付
+   - 关系：由订单生成
+   - **说明**：transaction_id 作为支付回执凭证
+
+7. **Shipment（物流单）**
+   - 属性：shipment_id（物流ID）、order_id（订单ID）、tracking_no（物流单号）、carrier（承运商）、current_status（当前状态）、current_location（当前位置）、estimated_delivery（预计送达）
+   - 操作：物流追踪、查询物流状态
+   - 关系：由订单生成，记录多条物流轨迹
+
+8. **ShipmentTrack（物流轨迹）**
+   - 属性：track_id（轨迹ID）、shipment_id（物流ID）、status（状态）、location（位置）、description（描述）、track_time（记录时间）
+   - 关系：多条轨迹属于一个物流单
+
+#### 客服与售后实体
+
+9. **SupportTicket（客服工单）**
+   - 属性：ticket_id（工单ID）、ticket_no（工单编号）、user_id（用户ID）、order_id（订单ID）、category（类别）、priority（优先级）、status（状态）、subject（主题）、description（描述）
+   - 操作：创建客服工单
+   - 关系：由用户为订单创建，包含多条客服消息
+
+10. **SupportMessage（客服消息）**
+    - 属性：message_id（消息ID）、ticket_id（工单ID）、sender_type（发送者类型）、sender_id（发送者ID）、message_content（消息内容）、sent_at（发送时间）
+    - 关系：多条消息属于一个客服工单
+
+11. **Return（退换货）**
+    - 属性：return_id（退货ID）、return_no（退货单号）、order_id（订单ID）、user_id（用户ID）、return_type（类型：退货/换货）、reason（原因）、status（状态）、refund_amount（退款金额）
+    - 操作：处理退货
+    - 关系：由订单发起
+
+12. **Review（商品评价）**
+    - 属性：review_id（评价ID）、product_id（商品ID）、user_id（用户ID）、order_id（订单ID）、rating（评分：1-5星）、content（内容）、images（图片）
+    - 操作：获取商品评价
+    - 关系：用户对商品进行评价
+
+### 架构图
+
+![架构图](docs/architecture_diagram.drawio)
+
+**实体关系**：
+- 用户 → 订单 → 订单明细 → 商品
+- 订单 → 购物车项 → 商品
+- 订单 → 支付单（支付金额、支付方式、交易流水号）
+- 订单 → 物流单 → 物流轨迹（位置、时间）
+- 用户/订单 → 客服工单 → 客服消息
+- 订单 → 退换货（退货单号、类型、退款金额）
+- 商品 → 商品评价（评分、内容）
+
+**本体推理规则**：
+- 折扣规则：VIP/SVIP 会员折扣、批量折扣（≥5000/≥10000）、首单折扣
+- 运费规则：订单满500包邮或 VIP/SVIP 包邮、SVIP 次日达、偏远地区加收
+- 退换货策略：普通用户7天无理由退货、VIP/SVIP 15天、商品类别特殊规则
+
+**MCP 工具层**：21个工具通过本体推理操作12个实体
+**ReAct 智能体**：调用工具，由强化学习优化（PPO模型、奖励系统）
+
 ## 📚 详细文档
 
 ### 完成报告

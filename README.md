@@ -336,6 +336,96 @@ curl -X POST http://localhost:8000/invoke \
 20. `commerce.process_return`
 21. `commerce.get_user_profile`
 
+## 🏗️ Ontology & Architecture
+
+### Ontology Semantic Model
+
+The system defines **12 core business entities** with complete relationships and properties:
+
+#### Core Transaction Entities
+
+1. **User** (用户)
+   - Properties: user_id, username, email, phone, user_level (Regular/VIP/SVIP), total_spent, credit_score
+   - Operations: Query user, User authentication
+   - Relationships: Creates orders, owns cart items, initiates support tickets
+
+2. **Product** (商品)
+   - Properties: product_id, product_name, category, brand, model, price, stock_quantity, specs
+   - Operations: Search products, Get product details, Check stock, Get recommendations, Get reviews
+   - Relationships: Referenced by cart items, order items, and reviews
+
+3. **CartItem** (购物车项)
+   - Properties: cart_id, user_id, product_id, quantity, added_at
+   - Operations: Add to cart, View cart, Remove from cart
+   - Relationships: Links users to products
+
+4. **Order** (订单)
+   - Properties: order_id, order_no, total_amount, discount_amount, final_amount, order_status, payment_status
+   - Operations: Create order, Get order details, Cancel order, Get user orders
+   - Relationships: Contains order items, generates payment and shipment records
+   - **Ontology Inference**: Discount amount calculated by ontology rules based on user level, order amount, and first-order status
+
+5. **OrderItem** (订单明细)
+   - Properties: item_id, order_id, product_id, product_name, quantity, unit_price, subtotal
+   - Relationships: Order contains multiple order items, each referencing a product
+
+6. **Payment** (支付单)
+   - Properties: payment_id, order_id, payment_method, payment_amount, payment_status, transaction_id, payment_time
+   - Operations: Process payment
+   - Relationships: Generated from orders
+   - **Note**: Transaction_id serves as payment receipt
+
+7. **Shipment** (物流单)
+   - Properties: shipment_id, order_id, tracking_no, carrier, current_status, current_location, estimated_delivery
+   - Operations: Track shipment, Get shipment status
+   - Relationships: Generated from orders, records shipment tracks
+
+8. **ShipmentTrack** (物流轨迹)
+   - Properties: track_id, shipment_id, status, location, description, track_time
+   - Relationships: Multiple tracks belong to one shipment
+
+#### Customer Service & After-sales Entities
+
+9. **SupportTicket** (客服工单)
+   - Properties: ticket_id, ticket_no, user_id, order_id, category, priority, status, subject, description
+   - Operations: Create support ticket
+   - Relationships: Created by users for orders, contains support messages
+
+10. **SupportMessage** (客服消息)
+    - Properties: message_id, ticket_id, sender_type, sender_id, message_content, sent_at
+    - Relationships: Multiple messages belong to one support ticket
+
+11. **Return** (退换货)
+    - Properties: return_id, return_no, order_id, user_id, return_type (return/exchange), reason, status, refund_amount
+    - Operations: Process return
+    - Relationships: Initiated from orders
+
+12. **Review** (商品评价)
+    - Properties: review_id, product_id, user_id, order_id, rating (1-5 stars), content, images
+    - Operations: Get product reviews
+    - Relationships: Users review products
+
+### Architecture Diagram
+
+![Architecture Diagram](docs/architecture_diagram.drawio)
+
+**Entity Relationships**:
+- User → Order → OrderItem → Product
+- Order → CartItem → Product
+- Order → Payment (payment_amount, payment_method, transaction_id)
+- Order → Shipment → ShipmentTrack (location, time)
+- User/Order → SupportTicket → SupportMessage
+- Order → Return (return_no, return_type, refund_amount)
+- Product → Review (rating, content)
+
+**Ontology Inference**: 
+- Discount rules: VIP/SVIP member discounts, volume discounts (≥5000/≥10000), first-order discount
+- Shipping rules: Free shipping (order ≥500 or VIP/SVIP), next-day delivery (SVIP), remote area surcharge
+- Return policy: 7-day no-reason return (Regular), 15-day (VIP/SVIP), category-specific rules
+
+**MCP Tools Layer**: 21 tools operate on 12 entities via ontology reasoning
+**ReAct Agent**: Calls tools, optimized by reinforcement learning (PPO model, reward system)
+
 ## 🧠 Agent Architecture
 
 ### Core components

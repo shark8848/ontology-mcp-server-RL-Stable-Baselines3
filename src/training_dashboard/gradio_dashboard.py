@@ -184,129 +184,130 @@ def build_dashboard(config: Optional[TrainingDashboardConfig] = None) -> gr.Bloc
 
     with gr.Blocks(css="""#logs {min-height:200px;}""") as demo:
         gr.Markdown("# 🧠 RL 训练控制台")
-        with gr.Tab("概览"):
-            status_md = gr.Markdown("尚未启动", elem_id="status_panel")
-            with gr.Row():
-                metrics_json = gr.JSON(label="最新训练指标")
-                metrics_plot = gr.LinePlot(
-                    label="奖励/长度走势",
-                    x="step",
-                    y=["mean_reward", "mean_length"],
-                    title="训练过程指标",
-                    tooltip=["mean_reward", "mean_length"],
-                    height=320,
-                )
-            metrics_table = gr.Dataframe(
-                headers=["Step", "Mean Reward", "Mean Length"],
-                interactive=False,
-                wrap=True,
-                label="详细指标",
-            )
-            logs_box = gr.Textbox(label="训练日志", lines=10, elem_id="logs")
-            log_timer = gr.Timer(value=3.0)
-            log_timer.tick(refresh_logs_live, outputs=logs_box)
-            refresh_btn = gr.Button("刷新状态")
-            refresh_btn.click(
-                refresh_status,
-                outputs=[status_md, metrics_json, logs_box, metrics_plot, metrics_table],
-            )
-            stop_btn = gr.Button("停止训练", variant="stop")
-            stop_result = gr.Markdown()
-            stop_btn.click(stop_training, outputs=stop_result)
-
-        with gr.Tab("语料管理"):
-            ingest_info = gr.Markdown("日志提炼任务按配置自动运行，也可手动触发。点击语料行可预览内容。")
-            static_table = gr.Dataframe(headers=["文件", "场景数", "类型", "路径"], interactive=False, label="静态语料")
-            log_table = gr.Dataframe(headers=["文件", "场景数", "类型", "路径"], interactive=False, label="日志语料")
-            refresh_corpus_btn = gr.Button("刷新语料列表")
-            refresh_corpus_btn.click(refresh_corpus_tables, outputs=[static_table, log_table])
-            ingest_btn = gr.Button("手动提炼日志")
-            ingest_result = gr.Markdown()
-            ingest_btn.click(ingest_logs_manual, outputs=ingest_result)
-
-            preview_overlay = gr.Group(visible=False)
-            with preview_overlay:
-                gr.Markdown("### 语料预览")
-                preview_desc = gr.Markdown("请选择语料")
-                preview_table = gr.Dataframe(
-                    headers=["名称", "分类", "Persona", "片段"],
+        with gr.Tabs():
+            with gr.Tab("概览"):
+                status_md = gr.Markdown("尚未启动", elem_id="status_panel")
+                with gr.Row():
+                    metrics_json = gr.JSON(label="最新训练指标")
+                    metrics_plot = gr.LinePlot(
+                        label="奖励/长度走势",
+                        x="step",
+                        y=["mean_reward", "mean_length"],
+                        title="训练过程指标",
+                        tooltip=["mean_reward", "mean_length"],
+                        height=320,
+                    )
+                metrics_table = gr.Dataframe(
+                    headers=["Step", "Mean Reward", "Mean Length"],
                     interactive=False,
                     wrap=True,
+                    label="详细指标",
                 )
-                preview_json = gr.JSON(label="完整语料 JSON")
-                close_btn = gr.Button("关闭预览", variant="secondary")
-                close_btn.click(lambda: gr.update(visible=False), outputs=preview_overlay)
+                logs_box = gr.Textbox(label="训练日志", lines=10, elem_id="logs")
+                log_timer = gr.Timer(value=3.0)
+                log_timer.tick(refresh_logs_live, outputs=logs_box)
+                refresh_btn = gr.Button("刷新状态")
+                refresh_btn.click(
+                    refresh_status,
+                    outputs=[status_md, metrics_json, logs_box, metrics_plot, metrics_table],
+                )
+                stop_btn = gr.Button("停止训练", variant="stop")
+                stop_result = gr.Markdown()
+                stop_btn.click(stop_training, outputs=stop_result)
 
-            def _preview_static_select(evt: gr.SelectData):
-                idx = evt.index
-                if isinstance(idx, (list, tuple)):
-                    idx = idx[0]
-                desc, rows, payload = preview_static(int(idx))
-                return (
-                    gr.update(visible=True),
-                    gr.update(value=desc),
-                    gr.update(value=rows or [["-", "-", "-", "(无内容)"]]),
-                    gr.update(value=payload),
+            with gr.Tab("语料管理"):
+                ingest_info = gr.Markdown("日志提炼任务按配置自动运行，也可手动触发。点击语料行可预览内容。")
+                static_table = gr.Dataframe(headers=["文件", "场景数", "类型", "路径"], interactive=False, label="静态语料")
+                log_table = gr.Dataframe(headers=["文件", "场景数", "类型", "路径"], interactive=False, label="日志语料")
+                refresh_corpus_btn = gr.Button("刷新语料列表")
+                refresh_corpus_btn.click(refresh_corpus_tables, outputs=[static_table, log_table])
+                ingest_btn = gr.Button("手动提炼日志")
+                ingest_result = gr.Markdown()
+                ingest_btn.click(ingest_logs_manual, outputs=ingest_result)
+
+                preview_overlay = gr.Group(visible=False)
+                with preview_overlay:
+                    gr.Markdown("### 语料预览")
+                    preview_desc = gr.Markdown("请选择语料")
+                    preview_table = gr.Dataframe(
+                        headers=["名称", "分类", "Persona", "片段"],
+                        interactive=False,
+                        wrap=True,
+                    )
+                    preview_json = gr.JSON(label="完整语料 JSON")
+                    close_btn = gr.Button("关闭预览", variant="secondary")
+                    close_btn.click(lambda: gr.update(visible=False), outputs=preview_overlay)
+
+                def _preview_static_select(evt: gr.SelectData):
+                    idx = evt.index
+                    if isinstance(idx, (list, tuple)):
+                        idx = idx[0]
+                    desc, rows, payload = preview_static(int(idx))
+                    return (
+                        gr.update(visible=True),
+                        gr.update(value=desc),
+                        gr.update(value=rows or [["-", "-", "-", "(无内容)"]]),
+                        gr.update(value=payload),
+                    )
+
+                def _preview_log_select(evt: gr.SelectData):
+                    idx = evt.index
+                    if isinstance(idx, (list, tuple)):
+                        idx = idx[0]
+                    desc, rows, payload = preview_log(int(idx))
+                    return (
+                        gr.update(visible=True),
+                        gr.update(value=desc),
+                        gr.update(value=rows or [["-", "-", "-", "(无内容)"]]),
+                        gr.update(value=payload),
+                    )
+
+                static_table.select(
+                    _preview_static_select,
+                    outputs=[preview_overlay, preview_desc, preview_table, preview_json],
+                )
+                log_table.select(
+                    _preview_log_select,
+                    outputs=[preview_overlay, preview_desc, preview_table, preview_json],
                 )
 
-            def _preview_log_select(evt: gr.SelectData):
-                idx = evt.index
-                if isinstance(idx, (list, tuple)):
-                    idx = idx[0]
-                desc, rows, payload = preview_log(int(idx))
-                return (
-                    gr.update(visible=True),
-                    gr.update(value=desc),
-                    gr.update(value=rows or [["-", "-", "-", "(无内容)"]]),
-                    gr.update(value=payload),
+            with gr.Tab("训练控制"):
+                with gr.Row():
+                    timesteps = gr.Number(label="训练步数", value=default_params.timesteps)
+                    eval_freq = gr.Number(label="评估频率", value=default_params.eval_freq)
+                    checkpoint_freq = gr.Number(label="检查点频率", value=default_params.checkpoint_freq)
+                    max_steps = gr.Number(label="Episode 步长", value=default_params.max_steps_per_episode)
+                use_embedding = gr.Checkbox(label="开启文本嵌入", value=default_params.use_text_embedding)
+                use_static = gr.Checkbox(label="使用静态语料", value=True)
+                use_logs = gr.Checkbox(label="使用日志语料", value=True)
+                start_btn = gr.Button("启动训练", variant="primary")
+                start_status = gr.Markdown()
+                start_btn.click(
+                    start_training,
+                    inputs=[
+                        timesteps,
+                        eval_freq,
+                        checkpoint_freq,
+                        max_steps,
+                        use_embedding,
+                        use_static,
+                        use_logs,
+                    ],
+                    outputs=start_status,
                 )
 
-            static_table.select(
-                _preview_static_select,
-                outputs=[preview_overlay, preview_desc, preview_table, preview_json],
-            )
-            log_table.select(
-                _preview_log_select,
-                outputs=[preview_overlay, preview_desc, preview_table, preview_json],
-            )
-
-        with gr.Tab("训练控制"):
-            with gr.Row():
-                timesteps = gr.Number(label="训练步数", value=default_params.timesteps)
-                eval_freq = gr.Number(label="评估频率", value=default_params.eval_freq)
-                checkpoint_freq = gr.Number(label="检查点频率", value=default_params.checkpoint_freq)
-                max_steps = gr.Number(label="Episode 步长", value=default_params.max_steps_per_episode)
-            use_embedding = gr.Checkbox(label="开启文本嵌入", value=default_params.use_text_embedding)
-            use_static = gr.Checkbox(label="使用静态语料", value=True)
-            use_logs = gr.Checkbox(label="使用日志语料", value=True)
-            start_btn = gr.Button("启动训练", variant="primary")
-            start_status = gr.Markdown()
-            start_btn.click(
-                start_training,
-                inputs=[
-                    timesteps,
-                    eval_freq,
-                    checkpoint_freq,
-                    max_steps,
-                    use_embedding,
-                    use_static,
-                    use_logs,
-                ],
-                outputs=start_status,
-            )
-
-        with gr.Tab("模型管理"):
-            model_table = gr.Dataframe(
-                headers=["模型ID", "Best", "Final", "元数据"],
-                interactive=False,
-            )
-            refresh_models_btn = gr.Button("刷新模型列表")
-            refresh_models_btn.click(list_models, outputs=model_table)
-            model_id_box = gr.Textbox(label="模型ID")
-            variant_radio = gr.Radio(["best", "final"], label="加载版本", value="best")
-            apply_btn = gr.Button("加载到 Agent")
-            apply_result = gr.Markdown()
-            apply_btn.click(apply_model, inputs=[model_id_box, variant_radio], outputs=apply_result)
+            with gr.Tab("模型管理"):
+                model_table = gr.Dataframe(
+                    headers=["模型ID", "Best", "Final", "元数据"],
+                    interactive=False,
+                )
+                refresh_models_btn = gr.Button("刷新模型列表")
+                refresh_models_btn.click(list_models, outputs=model_table)
+                model_id_box = gr.Textbox(label="模型ID")
+                variant_radio = gr.Radio(["best", "final"], label="加载版本", value="best")
+                apply_btn = gr.Button("加载到 Agent")
+                apply_result = gr.Markdown()
+                apply_btn.click(apply_model, inputs=[model_id_box, variant_radio], outputs=apply_result)
 
         demo.load(refresh_corpus_tables, outputs=[static_table, log_table])
         demo.load(

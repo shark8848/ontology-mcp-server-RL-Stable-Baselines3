@@ -892,7 +892,7 @@ result = ontology.infer_order_details(
 
 ### 架构图
 
-![架构图](docs/architecture_diagram.drawio)
+![架构图](docs/architecture_diagram.png)
 
 **实体关系**：
 - 用户 → 订单 → 订单明细 → 商品

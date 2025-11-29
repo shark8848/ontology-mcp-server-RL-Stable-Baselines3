@@ -407,7 +407,7 @@ The system defines **12 core business entities** with complete relationships and
 
 ### Architecture Diagram
 
-![Architecture Diagram](docs/architecture_diagram.drawio)
+![Architecture Diagram](docs/architecture_diagram.png)
 
 **Entity Relationships**:
 - User → Order → OrderItem → Product

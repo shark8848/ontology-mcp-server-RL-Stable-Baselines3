@@ -8,6 +8,7 @@
 - 用户请求“推荐 10 款好的电子产品”，Agent 进入 streaming 模式。
 - Intent Tracker 判定为 `recommendation`，Query Rewriter 将“电子产品”扩展为手机/电脑/耳机等关键词。
 - Agent 连续 8 次调用 `commerce.search_products`（FTS5 → 回退）并把结果通过 DeepSeek LLM 流式返回。
+- ![alt text](image.png)
 
 ```mermaid
 sequenceDiagram

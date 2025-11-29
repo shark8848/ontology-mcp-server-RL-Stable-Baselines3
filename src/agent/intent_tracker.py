@@ -302,8 +302,10 @@ class LLMIntentRecognizer(BaseIntentRecognizer):
 }}"""
         
         try:
-            response = self.llm.predict(prompt)
-            return response
+            response = self.llm.generate(
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.get("content", "")
         except Exception as e:
             logger.error(f"LLM 意图识别失败: {e}")
             return json.dumps({

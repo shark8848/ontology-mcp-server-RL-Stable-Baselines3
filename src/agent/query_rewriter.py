@@ -95,8 +95,10 @@ class QueryRewriter:
         """缓存的 LLM 改写调用"""
         prompt = self._build_rewrite_prompt(query, intent_str)
         try:
-            response = self.llm.predict(prompt)
-            return response
+            response = self.llm.generate(
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.get("content", "")
         except Exception as e:
             logger.error(f"LLM 查询改写失败: {e}")
             return self._fallback_rewrite(query)

@@ -1370,6 +1370,10 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 → 返回: Markdown表格 + 自然语言描述
 ```
 
+### 交互时序图（Interaction Sequence Diagrams）
+
+完整对话（推荐 → 多轮检索 → 下单支付 → 售后查询 → 统计图表）的日志链路与 UI 截图已整理在 [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md)。文档中每段对话包含一张 Mermaid 时序图和多张 PNG 截图，方便对照日志、工具调用与可视化结果。
+
 ### 2025-11-20
 
 **🎯 训练环境增强**

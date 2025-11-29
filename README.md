@@ -278,7 +278,7 @@ AI: [commerce.add_to_cart] Added... (state: browsing → cart)
 
 ### 7. Interaction sequence diagrams
 
-日志驱动的整场会话分段图示（推荐 → 多轮搜索 → 下单支付 → 售后查询 → 统计图表）已整理在 `docs/interaction_sequence_diagrams.md`。每段对话一张子图，便于排查具体工具链路与调用时序。
+日志驱动的整场会话分段图示（推荐 → 多轮搜索 → 下单支付 → 售后查询 → 统计图表）已整理在 [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md)。文档内为每轮对话提供一张 Mermaid 时序图以及对应的截图（PNG），可快速对照日志、工具链路与 UI 呈现效果。
 
 ### 8. Optional RL loop
 - `scripts/generate_dialogue_corpus.py` for the latest 200 fully real scenarios

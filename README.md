@@ -728,7 +728,12 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 
 ## 🏷️ Release Highlights
 
-### v1.5.1 (2025-11-23) — Latest
+### v1.5.2 (2025-11-29) — Streaming Trace Baseline ✅
+- Introduced [`docs/interaction_sequence_diagrams.md`](docs/interaction_sequence_diagrams.md) with log-sourced Mermaid diagrams plus PNG snapshots for each conversation turn (recommendation → multi-search → checkout → after-sales → analytics).
+- Linked the new documentation from both `README.md` and `README.zh.md`, clarifying how to replay the complete call chain and correlate UI evidence.
+- Captured the current state as tag `v1.5.2`, establishing a clean baseline for future RL or MCP upgrades.
+
+### v1.5.1 (2025-11-23)
 - Inline charts (Markdown + Base64 PNG) with intent/user-context metadata and `_filter_charts_by_intent()` privacy guard.
 - `analytics_service.py` with five chart data endpoints + `analytics_get_chart_data` MCP tool (22nd capability).
 - Dependency alignment: `plotly>=6.1.0,<7.0.0`, `kaleido==0.2.1`; diagnostic scripts (`verify_chart_fix.py`, `test_chart_feature.py`) and data/log backups.
@@ -762,7 +767,20 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 ### Base Version (2025-10)
 - Phases 1-5 complete: ORM, ontology, 21 tools, ReAct Agent, Gradio UI.
 
+## 📦 Version history
+
+| Version | Date | Highlights | Download |
+|---------|------|------------|-----------|
+| **v1.5.2** | 2025-11-29 | Sequence-diagram documentation + PNG evidence, README cross-links, new baseline tag | `git checkout v1.5.2` |
+| **v1.5.1** | 2025-11-23 | Inline chart streaming, analytics MCP tool, dashboard UX upgrades | `git checkout v1.5.1` |
+| **v1.5.0** | 2025-11-20 | RL closed loop, Docker/Compose packaging, 5-tab Gradio UI | `git checkout v1.5.0` |
+| **v1.0.0** | 2025-10 | Phase 1-3 baseline (ontology + tools + agent) | `git checkout v1.0.0` |
+
 ## 📝 Changelog
+
+### 2025-11-29
+- Added log-driven interaction sequence diagrams (Mermaid + PNG), referenced by both English/Chinese READMEs.
+- Tagged release **v1.5.2** as the latest baseline snapshot.
 
 See [README.zh.md](README.zh.md#-更新日志) for the detailed Chinese changelog (mirrors the English highlights above).
 

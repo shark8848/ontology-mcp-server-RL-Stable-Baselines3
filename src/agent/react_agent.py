@@ -1197,6 +1197,102 @@ class LangChainAgent:
         
         state = self.state_manager.get_state()
         return state.stage.value if state else None
+    
+    def run_stream(self, user_input: str):
+        """流式执行 Agent 推理循环，实时yield每个关键步骤
+        
+        Args:
+            user_input: 用户输入
+            
+        Yields:
+            Dict[str, Any]: 包含步骤类型和内容的字典
+            - step_type: 'thinking_start', 'intent_recognized', 'query_rewritten', 
+                        'tool_calling', 'tool_result', 'final_answer' 等
+            - content: 相应的内容
+            - metadata: 额外的元数据
+        """
+        # 步骤1: 开始思考
+        yield {
+            "step_type": "thinking_start",
+            "content": "正在分析您的需求...",
+            "metadata": {"user_input": user_input[:100]}
+        }
+        
+        logger.info("LangChain agent received input (stream mode): %s", user_input)
+        
+        # 步骤2: 意图识别
+        current_intent = None
+        if self.intent_tracker:
+            turn_id = len(self.quality_tracker.session_metrics.turns) + 1 if self.quality_tracker else 0
+            current_intent = self.intent_tracker.track_intent(user_input, turn_id)
+            yield {
+                "step_type": "intent_recognized",
+                "content": f"识别意图: {current_intent.category.value}",
+                "metadata": {
+                    "intent": current_intent.category.value,
+                    "confidence": current_intent.confidence
+                }
+            }
+            logger.info(f"识别意图: {current_intent.category.value} (置信度: {current_intent.confidence:.2f})")
+        
+        # 步骤3: 查询改写
+        rewritten_query = None
+        from .intent_tracker import IntentCategory
+        if (self.query_rewriter and current_intent and 
+            current_intent.category in [IntentCategory.RECOMMENDATION, IntentCategory.SEARCH]):
+            try:
+                rewritten_query = self.query_rewriter.rewrite(user_input, current_intent)
+                yield {
+                    "step_type": "query_rewritten",
+                    "content": f"查询改写完成: 类别={rewritten_query.category}",
+                    "metadata": {
+                        "keywords": rewritten_query.keywords[:3],
+                        "strategy": rewritten_query.search_strategy
+                    }
+                }
+                logger.info(f"查询已改写: 类别={rewritten_query.category}, 关键词={rewritten_query.keywords[:3]}")
+            except Exception as e:
+                logger.error(f"查询改写失败: {e}")
+        
+        # 步骤4: 调用原始run方法获取完整结果
+        # 这里yield工具调用过程
+        yield {
+            "step_type": "tool_calling_start",
+            "content": "正在调用工具获取信息...",
+            "metadata": {}
+        }
+        
+        # 调用原始run方法
+        result = self.run(user_input)
+        
+        # 步骤5: 报告工具调用结果
+        tool_log = result.get("tool_log", [])
+        if tool_log:
+            tool_names = [t.get("tool", "unknown") for t in tool_log[:5]]
+            yield {
+                "step_type": "tool_results",
+                "content": f"已调用 {len(tool_log)} 个工具",
+                "metadata": {
+                    "tool_count": len(tool_log),
+                    "tool_names": tool_names
+                }
+            }
+        
+        # 步骤6: 整理答案
+        yield {
+            "step_type": "finalizing",
+            "content": "正在整理答案...",
+            "metadata": {}
+        }
+        
+        # 步骤7: 返回最终结果
+        yield {
+            "step_type": "final_answer",
+            "content": result.get("final_answer", ""),
+            "metadata": {
+                "full_result": result
+            }
+        }
 
 
 # 保持旧名称兼容

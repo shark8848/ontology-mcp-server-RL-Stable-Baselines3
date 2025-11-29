@@ -1040,61 +1040,117 @@ def handle_user_message(user_message, chat_history=None, show_thinking=True):
     chart_figures: List[Any] = []
 
     try:
-        # 初始化思考内容
+        # 初始化结果变量
         thinking_steps = []
+        res = None
+        final = ""
+        plan = ""
+        tool_calls = []
+        charts = []
         
-        # 如果启用思考过程显示，先显示"正在分析..."状态
+        # 如果启用思考过程，使用流式方法
         if show_thinking:
-            thinking_steps.append("🤔 **正在分析您的需求...**")
-            assistant_placeholder["content"] = "\n".join(thinking_steps)
-            yield (
-                gr.update(value=chat_history),
-                gr.update(),  # plan_md
-                gr.update(),  # tool_md
-                gr.update(),  # memory_md
-                gr.update(),  # ecommerce_md
-                gr.update(),  # execution_log_md
-            )
+            for step in AGENT.run_stream(user_message):
+                step_type = step.get("step_type")
+                content = step.get("content", "")
+                metadata = step.get("metadata", {})
+                
+                if step_type == "thinking_start":
+                    thinking_steps = ["🤔 **正在分析您的需求...**"]
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
+                
+                elif step_type == "intent_recognized":
+                    thinking_steps.append(f"\n🎯 **{content}**")
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
+                
+                elif step_type == "query_rewritten":
+                    keywords = metadata.get("keywords", [])
+                    if keywords:
+                        thinking_steps.append(f"\n📝 **优化查询**: 关键词=[{', '.join(keywords)}]")
+                        assistant_placeholder["content"] = "\n".join(thinking_steps)
+                        yield (
+                            gr.update(value=chat_history),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(),
+                        )
+                
+                elif step_type == "tool_calling_start":
+                    thinking_steps.append(f"\n🔧 **{content}**")
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
+                
+                elif step_type == "tool_results":
+                    tool_names = metadata.get("tool_names", [])
+                    if tool_names:
+                        thinking_steps.append(f"\n✅ **已完成工具调用**: {len(tool_names)} 个工具")
+                        for i, name in enumerate(tool_names[:3], 1):
+                            thinking_steps.append(f"   {i}. `{name}`")
+                        if len(tool_names) > 3:
+                            thinking_steps.append(f"   ... 还有 {len(tool_names) - 3} 个")
+                        assistant_placeholder["content"] = "\n".join(thinking_steps)
+                        yield (
+                            gr.update(value=chat_history),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(),
+                        )
+                
+                elif step_type == "finalizing":
+                    thinking_steps.append(f"\n✨ **{content}**")
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
+                
+                elif step_type == "final_answer":
+                    # 获取完整结果
+                    res = metadata.get("full_result", {})
+                    final = content
+                    plan = res.get("plan", "(no plan provided)")
+                    tool_calls = res.get("tool_log", [])
+                    charts = res.get("charts", [])
+        else:
+            # 不显示思考过程，直接运行
+            res = AGENT.run(user_message)
+            final = res.get("final_answer") or ""
+            plan = res.get("plan") or "(no plan provided)"
+            tool_calls = res.get("tool_log", [])
+            charts = res.get("charts", [])
         
-        # 运行 Agent
-        res = AGENT.run(user_message)
-        final = res.get("final_answer") or ""
-        plan = res.get("plan") or "(no plan provided)"
-        tool_calls = res.get("tool_log", [])
-        charts = res.get("charts", [])
         LOGGER.info("handle_user_message: 收到 %d 个图表对象", len(charts))
-        
-        # 如果启用思考过程，展示工具调用过程
-        if show_thinking and tool_calls:
-            thinking_steps.append(f"\n🔧 **调用了 {len(tool_calls)} 个工具获取信息...**")
-            for i, tool_call in enumerate(tool_calls[:3], 1):  # 只显示前3个
-                tool_name = tool_call.get('tool', 'unknown')
-                thinking_steps.append(f"  {i}. 调用 `{tool_name}`")
-            if len(tool_calls) > 3:
-                thinking_steps.append(f"  ... 还有 {len(tool_calls) - 3} 个工具调用")
-            
-            assistant_placeholder["content"] = "\n".join(thinking_steps)
-            yield (
-                gr.update(value=chat_history),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-            )
-        
-        # 如果启用思考过程，显示"正在整理回答..."状态
-        if show_thinking:
-            thinking_steps.append("\n✨ **正在整理答案...**")
-            assistant_placeholder["content"] = "\n".join(thinking_steps)
-            yield (
-                gr.update(value=chat_history),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-            )
         
         # 根据意图和上下文过滤图表
         filtered_charts = _filter_charts_by_intent(charts, user_message, res)

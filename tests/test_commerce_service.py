@@ -36,22 +36,41 @@ def commerce_service(tmp_path):
     return service, user, product
 
 
+def _place_order(
+    service: CommerceService,
+    user,
+    product,
+    **overrides,
+):
+    payload = {
+        "user_id": user.user_id,
+        "items": [
+            {
+                "product_id": product.product_id,
+                "quantity": 1,
+                "unit_price": float(product.price),
+            }
+        ],
+        "shipping_address": overrides.pop("shipping_address", "上海市浦东新区世纪大道"),
+        "contact_phone": overrides.pop("contact_phone", "13800000000"),
+    }
+    payload.update(overrides)
+    return service.create_order(**payload)
+
+
 def test_search_and_order_flow(commerce_service):
     service, user, product = commerce_service
 
     search_result = service.search_products(keyword="iPhone")
     assert search_result["total"] >= 1
 
-    order_payload = {
-        "user_id": user.user_id,
-        "items": [
-            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
-        ],
-        "shipping_address": "上海市徐汇区漕溪北路",
-        "contact_phone": "13800008888",
-    }
-
-    create_result = service.create_order(**order_payload)
+    create_result = _place_order(
+        service,
+        user,
+        product,
+        shipping_address="上海市徐汇区漕溪北路",
+        contact_phone="13800008888",
+    )
     order_data = create_result["order"]
     assert order_data["order_id"] is not None
     assert create_result["inference"]["discount_inference"]["discount_type"] != "无折扣"
@@ -76,16 +95,13 @@ def test_search_and_order_flow(commerce_service):
 def test_get_order_detail_accepts_order_number(commerce_service):
     service, user, product = commerce_service
 
-    order_payload = {
-        "user_id": user.user_id,
-        "items": [
-            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
-        ],
-        "shipping_address": "深圳市福田区深南大道",
-        "contact_phone": "13900007777",
-    }
-
-    create_result = service.create_order(**order_payload)
+    create_result = _place_order(
+        service,
+        user,
+        product,
+        shipping_address="深圳市福田区深南大道",
+        contact_phone="13900007777",
+    )
     order_data = create_result["order"]
     order_no = order_data["order_no"]
 
@@ -100,16 +116,13 @@ def test_get_order_detail_accepts_order_number(commerce_service):
 def test_cancel_order_pending_within_window(commerce_service):
     service, user, product = commerce_service
 
-    order_payload = {
-        "user_id": user.user_id,
-        "items": [
-            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
-        ],
-        "shipping_address": "杭州市西湖区文三路",
-        "contact_phone": "13600006666",
-    }
-
-    create_result = service.create_order(**order_payload)
+    create_result = _place_order(
+        service,
+        user,
+        product,
+        shipping_address="杭州市西湖区文三路",
+        contact_phone="13600006666",
+    )
     order_id = create_result["order"]["order_id"]
 
     cancel_result = service.cancel_order(order_id)
@@ -121,16 +134,13 @@ def test_cancel_order_pending_within_window(commerce_service):
 def test_cancel_order_pending_after_window_denied(commerce_service):
     service, user, product = commerce_service
 
-    order_payload = {
-        "user_id": user.user_id,
-        "items": [
-            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
-        ],
-        "shipping_address": "北京市朝阳区建国路",
-        "contact_phone": "13500005555",
-    }
-
-    create_result = service.create_order(**order_payload)
+    create_result = _place_order(
+        service,
+        user,
+        product,
+        shipping_address="北京市朝阳区建国路",
+        contact_phone="13500005555",
+    )
     order_id = create_result["order"]["order_id"]
 
     with service.database.get_session() as session:
@@ -148,16 +158,13 @@ def test_cancel_order_pending_after_window_denied(commerce_service):
 def test_cancel_order_paid_within_window(commerce_service):
     service, user, product = commerce_service
 
-    order_payload = {
-        "user_id": user.user_id,
-        "items": [
-            {"product_id": product.product_id, "quantity": 1, "unit_price": float(product.price)}
-        ],
-        "shipping_address": "深圳市南山区科技园",
-        "contact_phone": "13400004444",
-    }
-
-    create_result = service.create_order(**order_payload)
+    create_result = _place_order(
+        service,
+        user,
+        product,
+        shipping_address="深圳市南山区科技园",
+        contact_phone="13400004444",
+    )
     order_id = create_result["order"]["order_id"]
 
     with service.database.get_session() as session:
@@ -170,3 +177,21 @@ def test_cancel_order_paid_within_window(commerce_service):
 
     assert cancel_result["cancelled"] is True
     assert cancel_result["policy"]["rule"] == "Paid12hCancellationRule"
+
+
+def test_create_order_records_discount_rule(commerce_service):
+    service, user, product = commerce_service
+
+    create_result = _place_order(
+        service,
+        user,
+        product,
+        shipping_address="成都市高新区天府大道",
+        contact_phone="13300003333",
+    )
+
+    discount_info = create_result["inference"]["discount_inference"]
+
+    assert discount_info["rule_applied"].startswith("http://example.org/rules#")
+    assert discount_info["discount_rate"] < Decimal("1")
+    assert "折扣率" in discount_info["reason"]

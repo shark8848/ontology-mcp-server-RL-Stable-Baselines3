@@ -172,8 +172,8 @@ export MCP_BASE_URL="http://ontology-mcp-server:8000"
 
 ```bash
 ./scripts/start_all.sh
-# Logs are streamed to logs/<service>_yyyyMMdd_HHmmss.log
-tail -f logs/server_*.log
+# 默认汇总到 logs/server.log（按日轮转），若想恢复各脚本独立日志，运行前导出 DISABLE_SCRIPT_LOG_FILES=0
+tail -f logs/server.log
 ```
 
 Stop everything:
@@ -659,8 +659,14 @@ python train_rl_agent.py --timesteps 20000 --eval-freq 2000 --checkpoint-freq 50
 export ONTOLOGY_DATA_DIR="$(pwd)/data"
 export APP_HOST=0.0.0.0
 export APP_PORT=8000
-export ONTOLOGY_USE_OWLREADY2=false
 ```
+
+**Ontology toggle (config.yaml)**
+```yaml
+ontology:
+   use_owlready2: true  # 默认启用，可通过 config.yaml 修改
+```
+> 如需在运行时临时关闭，可设置 `ONTOLOGY_USE_OWLREADY2=false` 环境变量覆盖上述配置。
 
 **Agent & LLM**
 ```bash
@@ -683,6 +689,11 @@ export LOG_DIR="$(pwd)/logs"
 export TB_LOG_DIR="$(pwd)/data/rl_training/logs/tensorboard"
 export TB_HOST=0.0.0.0
 export TB_PORT=6006
+
+# 统一日志输出
+export ONTOLOGY_SERVER_LOG_DIR="$(pwd)/logs"   # 默认也是 repo/logs
+# 设为 0 可恢复各 run_*.sh 生成单独 log 文件
+export DISABLE_SCRIPT_LOG_FILES=1
 ```
 
 **RL helpers**
@@ -777,6 +788,11 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 | **v1.0.0** | 2025-10 | Phase 1-3 baseline (ontology + tools + agent) | `git checkout v1.0.0` |
 
 ## 📝 Changelog
+
+### 2025-11-30
+- **Ontology-first推理覆盖**：`ecommerce_ontology.py` 现对折扣、物流、退货、取消四大流程优先加载 `ontology_rules.ttl`，命中规则时返回 `rule_applied`，无匹配才退回静态策略；对应 `tests/test_commerce_service.py`、`tests/test_services.py` 已通过全量 pytest。
+- **日志统一与按日轮转**：所有 Python 模块写入 `logs/server.log`（日切 + `server_YYYYMMDD.log` 归档），`start_all.sh` 默认设置 `DISABLE_SCRIPT_LOG_FILES=1` 防止重复日志，如需旧行为可手动置 0；新增 `ONTOLOGY_SERVER_LOG_DIR`/`ONTOLOGY_LOG_BACKUP_COUNT` 控制输出目录与留存天数。
+- **本体资产清理**：`ontology_commerce.ttl` 和 `ontology_ecommerce.ttl` 补齐 SWRL 前缀、变量、折扣实体与规则，使 Owlready2/外部引擎读取更稳；README/配置章节同步记录新的日志变量与使用方式。
 
 ### 2025-11-29
 - **True streaming loop**: `react_agent.py` now exposes generator-based `run_stream`, the DeepSeek adapter emits token deltas, and the Gradio UI renders thoughts + final answers token-by-token for transparent reasoning playback.

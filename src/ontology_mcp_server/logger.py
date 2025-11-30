@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
-from logging.handlers import RotatingFileHandler
+import re
+from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
@@ -19,17 +21,81 @@ _initialized: bool = False
 _LOGGER_NAME = "ontology_mcp_server"
 
 
+class DailyTimestampedRotatingHandler(TimedRotatingFileHandler):
+    """按天分割日志，历史文件自动追加时间戳。"""
+
+    _TIMESTAMP_FORMAT = "%Y%m%d"
+
+    def __init__(self, filename: str, *, backup_count: int = 14) -> None:
+        super().__init__(
+            filename,
+            when="midnight",
+            interval=1,
+            backupCount=backup_count,
+            encoding="utf-8",
+            delay=True,
+        )
+        self.suffix = "%Y%m%d"
+
+    def rotate(self, source: str, dest: str) -> None:  # type: ignore[override]
+        src_path = Path(source)
+        # dest 形如 /path/server.log.20251130
+        timestamp = Path(dest).name.split(".")[-1]
+        if not timestamp:
+            timestamp = datetime.now().strftime(self._TIMESTAMP_FORMAT)
+        rotated_name = f"{src_path.stem}_{timestamp}{src_path.suffix}"
+        rotated_path = src_path.with_name(rotated_name)
+        if rotated_path.exists():
+            rotated_path.unlink()
+        super().rotate(source, str(rotated_path))
+
+    def getFilesToDelete(self) -> list[str]:  # type: ignore[override]
+        if self.backupCount <= 0:
+            return []
+
+        base_path = Path(self.baseFilename)
+        pattern = f"{base_path.stem}_*{base_path.suffix}"
+        candidates = sorted(
+            (
+                path
+                for path in base_path.parent.glob(pattern)
+                if self._is_timestamped_rotation(path)
+            ),
+            key=lambda p: p.stat().st_mtime,
+        )
+
+        if len(candidates) <= self.backupCount:
+            return []
+        return [str(p) for p in candidates[: len(candidates) - self.backupCount]]
+
+    @staticmethod
+    def _is_timestamped_rotation(path: Path) -> bool:
+        stem_parts = path.stem.rsplit("_", 1)
+        if len(stem_parts) != 2:
+            return False
+        timestamp = stem_parts[1]
+        return bool(re.fullmatch(r"\d{8}", timestamp))
+
+
 def _log_dir() -> Path:
     env_dir = os.getenv("ONTOLOGY_SERVER_LOG_DIR") or os.getenv("ONTOLOGY_MCP_LOG_DIR")
+
+    candidates = []
     if env_dir:
-        return Path(env_dir)
-    pkg_dir = Path(__file__).resolve().parent / "logs"
-    try:
-        pkg_dir.mkdir(parents=True, exist_ok=True)
-        return pkg_dir
-    except Exception:
-        pass
-    fallback = Path.cwd() / "logs" / "ontology_mcp_server"
+        candidates.append(Path(env_dir))
+
+    repo_logs = Path(__file__).resolve().parents[2] / "logs"
+    candidates.append(repo_logs)
+    candidates.append(Path.cwd() / "logs")
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except Exception:
+            continue
+
+    fallback = Path.cwd()
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
@@ -65,8 +131,9 @@ def init_logging(level_name: Optional[str] = None) -> None:
 
     try:
         file_path = log_dir / "server.log"
-        file_handler = RotatingFileHandler(
-            str(file_path), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        backup_count = int(os.getenv("ONTOLOGY_LOG_BACKUP_COUNT", "14"))
+        file_handler = DailyTimestampedRotatingHandler(
+            str(file_path), backup_count=backup_count
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)

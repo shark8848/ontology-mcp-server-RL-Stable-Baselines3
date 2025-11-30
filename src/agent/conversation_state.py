@@ -148,49 +148,59 @@ class ConversationStateManager:
         """
         input_lower = user_input.lower()
         tool_names = [call.get("tool", "") for call in tool_calls]
+
+        def _log_and_return(stage: ConversationStage, reason: str) -> ConversationStage:
+            logger.info(
+                "对话阶段推理[推理方式=工具优先+关键词回退]: stage=%s reason=%s tools=%s",
+                stage.value,
+                reason,
+                tool_names,
+            )
+            return stage
         
         # 基于工具调用推断
         if any("search_products" in t for t in tool_names):
-            return ConversationStage.BROWSING
+            return _log_and_return(ConversationStage.BROWSING, "tool=search_products")
         
         if any("get_product_detail" in t for t in tool_names):
-            return ConversationStage.SELECTING
+            return _log_and_return(ConversationStage.SELECTING, "tool=get_product_detail")
         
         if any(t in ["add_to_cart", "view_cart", "remove_from_cart"] for t in tool_names):
-            return ConversationStage.CART_MANAGEMENT
+            return _log_and_return(ConversationStage.CART_MANAGEMENT, "tool=cart_ops")
         
         if any("create_order" in t for t in tool_names):
-            return ConversationStage.CHECKOUT
+            return _log_and_return(ConversationStage.CHECKOUT, "tool=create_order")
         
         if any(t in ["process_payment", "get_order_detail", "track_shipment"] for t in tool_names):
-            return ConversationStage.ORDER_TRACKING
+            return _log_and_return(ConversationStage.ORDER_TRACKING, "tool=order_tracking")
         
         if any(t in ["create_support_ticket", "process_return"] for t in tool_names):
-            return ConversationStage.CUSTOMER_SERVICE
+            return _log_and_return(ConversationStage.CUSTOMER_SERVICE, "tool=customer_service")
         
         # 基于关键词推断
         browse_keywords = ["搜索", "找", "看看", "推荐", "有什么", "商品"]
         if any(kw in input_lower for kw in browse_keywords):
-            return ConversationStage.BROWSING
+            return _log_and_return(ConversationStage.BROWSING, "keyword=browse")
         
         cart_keywords = ["购物车", "加入", "加购", "移除"]
         if any(kw in input_lower for kw in cart_keywords):
-            return ConversationStage.CART_MANAGEMENT
+            return _log_and_return(ConversationStage.CART_MANAGEMENT, "keyword=cart")
         
         order_keywords = ["下单", "购买", "结算", "支付"]
         if any(kw in input_lower for kw in order_keywords):
-            return ConversationStage.CHECKOUT
+            return _log_and_return(ConversationStage.CHECKOUT, "keyword=checkout")
         
         tracking_keywords = ["订单", "物流", "快递", "发货"]
         if any(kw in input_lower for kw in tracking_keywords):
-            return ConversationStage.ORDER_TRACKING
+            return _log_and_return(ConversationStage.ORDER_TRACKING, "keyword=tracking")
         
         service_keywords = ["退货", "换货", "售后", "客服", "投诉"]
         if any(kw in input_lower for kw in service_keywords):
-            return ConversationStage.CUSTOMER_SERVICE
+            return _log_and_return(ConversationStage.CUSTOMER_SERVICE, "keyword=service")
         
         # 默认返回当前阶段或空闲
-        return self.state.stage if self.state else ConversationStage.IDLE
+        default_stage = self.state.stage if self.state else ConversationStage.IDLE
+        return _log_and_return(default_stage, "fallback=current_stage")
     
     def update_from_tool_results(self, tool_log: List[Dict[str, Any]]) -> None:
         """从工具调用结果更新状态

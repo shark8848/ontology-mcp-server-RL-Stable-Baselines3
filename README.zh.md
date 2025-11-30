@@ -357,7 +357,7 @@ curl http://localhost:8000/health
 {
   "status": "ok",
   "timestamp": "2025-11-11T08:00:00Z",
-  "use_owlready2": false,
+  "use_owlready2": true,
   "ttl_path": "/path/to/ontology_commerce.ttl",
   "shapes_path": "/path/to/ontology_shapes.ttl"
 }
@@ -976,8 +976,14 @@ python train_rl_agent.py --timesteps 20000 --eval-freq 2000 --checkpoint-freq 50
 export ONTOLOGY_DATA_DIR="$(pwd)/data"   # 必填：数据库、本体、语料路径
 export APP_HOST=0.0.0.0                   # uvicorn 监听地址
 export APP_PORT=8000                      # uvicorn 端口
-export ONTOLOGY_USE_OWLREADY2=false       # 是否启用 Owlready2 推理
 ```
+
+**本体配置（config.yaml）**
+```yaml
+ontology:
+  use_owlready2: true   # 默认启用 Owlready2，可在 config.yaml 中修改
+```
+> 暂时关闭推理时，可设置 `ONTOLOGY_USE_OWLREADY2=false` 环境变量覆盖。
 
 **Agent & LLM**
 ```bash
@@ -1329,6 +1335,20 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 ---
 
 ## 📝 更新日志
+
+### 2025-11-30
+
+**🧠 本体优先推理覆盖**
+- `src/ontology_mcp_server/ecommerce_ontology.py` 现对折扣、物流、退货、取消四大流程优先加载 `ontology_rules.ttl` 执行推理，并在命中规则时回传 `rule_applied`；当缺省规则或数据不足时才回退既有静态逻辑。
+- `tests/test_commerce_service.py`、`tests/test_services.py` 已通过最新 pytest，覆盖四类流程，确保回归安全。
+
+**🗂️ 日志统一与按日轮转**
+- `logger.py` 新增按日轮转处理器，所有 Python 服务统一输出到仓库根目录 `logs/server.log`，并同步归档 `server_YYYYMMDD.log`。
+- `scripts/start_all.sh` 默认导出 `DISABLE_SCRIPT_LOG_FILES=1`，避免 nohup 重复写入；如需保留旧行为，可临时设为 0。新增 `ONTOLOGY_SERVER_LOG_DIR`/`ONTOLOGY_LOG_BACKUP_COUNT` 环境变量分别控制日志目录与留存天数。
+
+**📚 本体资产清理**
+- `data/ontology_commerce.ttl`、`data/ontology_ecommerce.ttl` 补齐 SWRL 变量定义与命名修正，可被 RDFLib/Owlready2 稳定加载；相关使用说明已在 README 中英文版本同步。
+- Owlready2 转换/推理脚本已验证可在 RDF/XML 模式下正常载入，SWRL 规则建议交由外部 SWRL 引擎或后续 RL 推理流程处理。
 
 ### 2025-11-29
 

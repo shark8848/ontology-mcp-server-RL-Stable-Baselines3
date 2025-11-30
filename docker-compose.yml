@@ -12,7 +12,6 @@ services:
       - ./config:/app/config
     environment:
       - ONTOLOGY_DATA_DIR=/app/data
-      - ONTOLOGY_USE_OWLREADY2=false
     command: uvicorn ontology_mcp_server.server:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

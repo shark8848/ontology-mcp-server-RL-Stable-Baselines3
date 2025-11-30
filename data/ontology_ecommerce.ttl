@@ -3,6 +3,8 @@
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix swrl: <http://www.w3.org/2003/11/swrl#> .
+@prefix swrlb: <http://www.w3.org/2003/11/swrlb#> .
 
 # ============================================
 # 电商本体 - 苹果手机在线商城
@@ -301,6 +303,13 @@
     rdfs:label "信用分"@zh ;
     rdfs:comment "用户信用评分"@zh .
 
+:returnPeriod rdf:type owl:DatatypeProperty ;
+    rdfs:domain :User ;
+    rdfs:range xsd:integer ;
+    rdfs:label "return period"@en ;
+    rdfs:label "退货期限"@zh ;
+    rdfs:comment "用户可享受的退货天数"@zh .
+
 # ---------- 商品属性 ----------
 
 :productId rdf:type owl:DatatypeProperty ;
@@ -388,6 +397,13 @@
     rdfs:label "shipping address"@en ;
     rdfs:label "收货地址"@zh .
 
+:freeShipping rdf:type owl:DatatypeProperty ;
+    rdfs:domain :Order ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "free shipping"@en ;
+    rdfs:label "包邮"@zh ;
+    rdfs:comment "订单是否享受包邮"@zh .
+
 # ---------- 折扣属性 ----------
 
 :discountRate rdf:type owl:DatatypeProperty ;
@@ -402,6 +418,42 @@
     rdfs:range xsd:string ;
     rdfs:label "discount type"@en ;
     rdfs:label "折扣类型"@zh .
+
+:VIPDiscount rdf:type :UserLevelDiscount ;
+    rdfs:label "VIP Discount"@en ;
+    rdfs:label "VIP折扣"@zh ;
+    :discountRate "0.95"^^xsd:decimal ;
+    :discountType "VIP" .
+
+:SVIPDiscount rdf:type :UserLevelDiscount ;
+    rdfs:label "SVIP Discount"@en ;
+    rdfs:label "SVIP折扣"@zh ;
+    :discountRate "0.90"^^xsd:decimal ;
+    :discountType "SVIP" .
+
+:VolumeDiscount5k rdf:type :VolumeDiscount ;
+    rdfs:label "Volume Discount 5k"@en ;
+    rdfs:label "批量折扣5000"@zh ;
+    :discountRate "0.95"^^xsd:decimal ;
+    :discountType "Volume5k" .
+
+:VolumeDiscount10k rdf:type :VolumeDiscount ;
+    rdfs:label "Volume Discount 10k"@en ;
+    rdfs:label "批量折扣10000"@zh ;
+    :discountRate "0.90"^^xsd:decimal ;
+    :discountType "Volume10k" .
+
+# ============================================
+# SWRL 变量定义
+# ============================================
+
+:VarUser a swrl:Variable ; swrl:varName "user" .
+:VarOrder a swrl:Variable ; swrl:varName "order" .
+:VarSpent a swrl:Variable ; swrl:varName "spent" .
+:VarAmount a swrl:Variable ; swrl:varName "amount" .
+:VarDiscount a swrl:Variable ; swrl:varName "discount" .
+:VarShipment a swrl:Variable ; swrl:varName "shipment" .
+:VarReturnDays a swrl:Variable ; swrl:varName "return_days" .
 
 # ---------- 物流属性 ----------
 
@@ -463,3 +515,126 @@
 
 # 规则10: 退货期限 - VIP用户15天
 # Rule: User(?u) ^ VIPUser(?u) -> returnPeriod(?u, 15)
+
+# ============================================
+# SWRL 规则实现
+# ============================================
+
+:RuleVIPUpgrade a swrl:Imp ;
+    rdfs:label "VIP用户判定"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :User ; swrl:argument1 :VarUser ]
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :totalSpent ; swrl:argument1 :VarUser ; swrl:argument2 :VarSpent ]
+        [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThanOrEqual ; swrl:arguments ( :VarSpent "5000"^^xsd:decimal ) ]
+        [ a swrl:BuiltinAtom ; swrl:builtin swrlb:lessThan ; swrl:arguments ( :VarSpent "10000"^^xsd:decimal ) ]
+    ) ;
+    swrl:head (
+        [ a swrl:ClassAtom ; swrl:classPredicate :VIPUser ; swrl:argument1 :VarUser ]
+    ) .
+
+:RuleSVIPUpgrade a swrl:Imp ;
+    rdfs:label "SVIP用户判定"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :User ; swrl:argument1 :VarUser ]
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :totalSpent ; swrl:argument1 :VarUser ; swrl:argument2 :VarSpent ]
+        [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThanOrEqual ; swrl:arguments ( :VarSpent "10000"^^xsd:decimal ) ]
+    ) ;
+    swrl:head (
+        [ a swrl:ClassAtom ; swrl:classPredicate :SVIPUser ; swrl:argument1 :VarUser ]
+    ) .
+
+:RuleVIPDiscount a swrl:Imp ;
+    rdfs:label "VIP折扣规则"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasOrder ; swrl:argument1 :VarUser ; swrl:argument2 :VarOrder ]
+        [ a swrl:ClassAtom ; swrl:classPredicate :VIPUser ; swrl:argument1 :VarUser ]
+    ) ;
+    swrl:head (
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :appliesDiscount ; swrl:argument1 :VarOrder ; swrl:argument2 :VIPDiscount ]
+    ) .
+
+:RuleSVIPDiscount a swrl:Imp ;
+    rdfs:label "SVIP折扣规则"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasOrder ; swrl:argument1 :VarUser ; swrl:argument2 :VarOrder ]
+        [ a swrl:ClassAtom ; swrl:classPredicate :SVIPUser ; swrl:argument1 :VarUser ]
+    ) ;
+    swrl:head (
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :appliesDiscount ; swrl:argument1 :VarOrder ; swrl:argument2 :SVIPDiscount ]
+    ) .
+
+:RuleVolumeDiscount5k a swrl:Imp ;
+    rdfs:label "批量折扣5000"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :orderAmount ; swrl:argument1 :VarOrder ; swrl:argument2 :VarAmount ]
+        [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThanOrEqual ; swrl:arguments ( :VarAmount "5000"^^xsd:decimal ) ]
+    ) ;
+    swrl:head (
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :appliesDiscount ; swrl:argument1 :VarOrder ; swrl:argument2 :VolumeDiscount5k ]
+    ) .
+
+:RuleVolumeDiscount10k a swrl:Imp ;
+    rdfs:label "批量折扣10000"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :orderAmount ; swrl:argument1 :VarOrder ; swrl:argument2 :VarAmount ]
+        [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThanOrEqual ; swrl:arguments ( :VarAmount "10000"^^xsd:decimal ) ]
+    ) ;
+    swrl:head (
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :appliesDiscount ; swrl:argument1 :VarOrder ; swrl:argument2 :VolumeDiscount10k ]
+    ) .
+
+:RuleFreeShippingAmount a swrl:Imp ;
+    rdfs:label "满额包邮"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :orderAmount ; swrl:argument1 :VarOrder ; swrl:argument2 :VarAmount ]
+        [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThanOrEqual ; swrl:arguments ( :VarAmount "500"^^xsd:decimal ) ]
+    ) ;
+    swrl:head (
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :freeShipping ; swrl:argument1 :VarOrder ; swrl:argument2 "true"^^xsd:boolean ]
+    ) .
+
+:RuleFreeShippingVIP a swrl:Imp ;
+    rdfs:label "VIP包邮"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasOrder ; swrl:argument1 :VarUser ; swrl:argument2 :VarOrder ]
+        [ a swrl:ClassAtom ; swrl:classPredicate :VIPUser ; swrl:argument1 :VarUser ]
+    ) ;
+    swrl:head (
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :freeShipping ; swrl:argument1 :VarOrder ; swrl:argument2 "true"^^xsd:boolean ]
+    ) .
+
+:RuleSVIPNextDay a swrl:Imp ;
+    rdfs:label "SVIP次日达"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :Order ; swrl:argument1 :VarOrder ]
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasOrder ; swrl:argument1 :VarUser ; swrl:argument2 :VarOrder ]
+        [ a swrl:ClassAtom ; swrl:classPredicate :SVIPUser ; swrl:argument1 :VarUser ]
+        [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasShipment ; swrl:argument1 :VarOrder ; swrl:argument2 :VarShipment ]
+    ) ;
+    swrl:head (
+        [ a swrl:ClassAtom ; swrl:classPredicate :NextDayDelivery ; swrl:argument1 :VarShipment ]
+    ) .
+
+:RuleReturnPeriodRegular a swrl:Imp ;
+    rdfs:label "普通用户退货期"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :RegularUser ; swrl:argument1 :VarUser ]
+    ) ;
+    swrl:head (
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :returnPeriod ; swrl:argument1 :VarUser ; swrl:argument2 "7"^^xsd:integer ]
+    ) .
+
+:RuleReturnPeriodVIP a swrl:Imp ;
+    rdfs:label "VIP退货期"@zh ;
+    swrl:body (
+        [ a swrl:ClassAtom ; swrl:classPredicate :VIPUser ; swrl:argument1 :VarUser ]
+    ) ;
+    swrl:head (
+        [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :returnPeriod ; swrl:argument1 :VarUser ; swrl:argument2 "15"^^xsd:integer ]
+    ) .

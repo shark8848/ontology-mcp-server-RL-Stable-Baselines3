@@ -33,17 +33,22 @@
   rdfs:domain :Order ;
   rdfs:range xsd:decimal .
 
+# SWRL variables
+:VarOrder a swrl:Variable ; swrl:varName "order" .
+:VarCustomer a swrl:Variable ; swrl:varName "customer" .
+:VarAmount a swrl:Variable ; swrl:varName "amount" .
+
 # SWRL-like rule (annotation for demo):
 # if (?c rdf:type VIPCustomer) and (?o hasCustomer ?c) and (?o totalAmount ?amt) and swrlb:greaterThan(?amt, 1000)
 # then (?o discountRate 0.1)
 [] a swrl:Imp ;
    rdfs:label "VIP discount rule" ;
    swrl:body (
-     [ a swrl:ClassAtom ; swrl:classPredicate :VIPCustomer ; swrl:argument1 ?c ]
-     [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasCustomer ; swrl:argument1 ?o ; swrl:argument2 ?c ]
-     [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :totalAmount ; swrl:argument1 ?o ; swrl:argument2 ?amt ]
-     [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThan ; swrl:arguments ( ?amt 1000 ) ]
+     [ a swrl:ClassAtom ; swrl:classPredicate :VIPCustomer ; swrl:argument1 :VarCustomer ]
+     [ a swrl:IndividualPropertyAtom ; swrl:propertyPredicate :hasCustomer ; swrl:argument1 :VarOrder ; swrl:argument2 :VarCustomer ]
+     [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :totalAmount ; swrl:argument1 :VarOrder ; swrl:argument2 :VarAmount ]
+     [ a swrl:BuiltinAtom ; swrl:builtin swrlb:greaterThan ; swrl:arguments ( :VarAmount "1000"^^xsd:decimal ) ]
    ) ;
    swrl:head (
-     [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :discountRate ; swrl:argument1 ?o ; swrl:argument2 0.1 ]
+     [ a swrl:DatavaluedPropertyAtom ; swrl:propertyPredicate :discountRate ; swrl:argument1 :VarOrder ; swrl:argument2 "0.1"^^xsd:decimal ]
    ) .

@@ -60,24 +60,31 @@ class OntologyService:
 
     def explain_discount(self, is_vip: bool, amount: float) -> Tuple[bool, float, str]:
         """返回折扣命中情况、折扣率及规则来源。"""
-        self.logger.debug("计算折扣: is_vip=%s amount=%s", is_vip, amount)
+        self.logger.debug(
+            "折扣推理入口[推理方式=owlready2优先]: is_vip=%s amount=%s use_owlready2=%s",
+            is_vip,
+            amount,
+            self.settings.use_owlready2,
+        )
         if self.settings.use_owlready2:
-            self.logger.debug("尝试使用 owlready2 推理")
+            self.logger.debug("折扣推理[推理方式=owlready2] 尝试执行")
             inferred = self._infer_with_owlready2(is_vip, amount)
             if inferred is not None:
-                self.logger.info("owlready2 推理命中: %s", inferred)
+                self.logger.info("折扣推理[推理方式=owlready2] 命中: %s", inferred)
                 return inferred
         if is_vip and amount > 1000:
-            self.logger.info("规则匹配: VIP 且总额>1000，命中折扣 0.1")
+            self.logger.info(
+                "折扣推理[推理方式=静态规则] 匹配 VIP 且总额>1000，命中折扣 0.1"
+            )
             return True, 0.1, "swrl: if VIP and total>1000 then discount=0.1"
-        self.logger.info("未命中任何折扣规则")
+        self.logger.info("折扣推理[推理方式=静态规则] 未命中任何折扣规则")
         return False, 0.0, "no rule matched"
 
     def _infer_with_owlready2(self, is_vip: bool, amount: float) -> Tuple[bool, float, str] | None:
         try:
             from owlready2 import World, sync_reasoner_pellet, sync_reasoner
         except Exception:
-            self.logger.warning("无法导入 owlready2，跳过 owl 推理")
+            self.logger.warning("折扣推理[推理方式=owlready2] 无法导入依赖，跳过")
             return None
         ttl_path = self.settings.ttl_path
         if not ttl_path.exists():
@@ -92,7 +99,7 @@ class OntologyService:
             totalAmount = getattr(onto, "totalAmount", None)
             discountRate = getattr(onto, "discountRate", None)
             if not all([Customer, VIPCustomer, Order, hasCustomer, totalAmount, discountRate]):
-                self.logger.warning("本体不包含所需的类/属性，无法使用 owlready2 推理")
+                self.logger.warning("折扣推理[推理方式=owlready2] 缺少必需类/属性，跳过")
                 return None
             with onto:
                 customer = (VIPCustomer if is_vip else Customer)("_c_tmp")
@@ -102,7 +109,7 @@ class OntologyService:
             try:
                 sync_reasoner_pellet(world=world, infer_property_values=True, infer_data_property_values=True)
             except Exception:
-                self.logger.debug("pellet 推理不可用，回退到 sync_reasoner")
+                self.logger.debug("折扣推理[推理方式=owlready2] pellet 不可用，回退 sync_reasoner")
                 sync_reasoner(world=world, infer_property_values=True, infer_data_property_values=True)
             values = list(getattr(order, "discountRate", []) or [])
             if values:
@@ -110,10 +117,10 @@ class OntologyService:
                     rate = float(values[0])
                 except Exception:
                     rate = 0.1 if is_vip and amount > 1000 else 0.0
-                self.logger.info("owlready2 推理得到折扣率: %s", rate)
+                self.logger.info("折扣推理[推理方式=owlready2] 推断折扣率: %s", rate)
                 return (rate > 0.0), rate, "owlready2: inferred by ontology rule"
         except Exception:
-            self.logger.exception("owlready2 推理时出错，放弃：")
+            self.logger.exception("折扣推理[推理方式=owlready2] 执行出错，放弃：")
             return None
         return None
 

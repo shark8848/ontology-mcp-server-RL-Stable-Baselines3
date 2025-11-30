@@ -9,14 +9,26 @@ cd "${REPO_ROOT}"
 mkdir -p "${LOG_DIR}"
 PROCESS_REGISTRY="${LOG_DIR}/processes.pid"
 touch "${PROCESS_REGISTRY}"
-LOG_FILE="${LOG_DIR}/training_dashboard_$(date '+%Y%m%d_%H%M%S').log"
+
+DISABLE_SCRIPT_LOG_FILES=${DISABLE_SCRIPT_LOG_FILES:-0}
+if [[ "${DISABLE_SCRIPT_LOG_FILES}" == "1" ]]; then
+	LOG_FILE=""
+	LOG_TARGET="/dev/null"
+else
+	LOG_FILE="${LOG_DIR}/training_dashboard_$(date '+%Y%m%d_%H%M%S').log"
+	LOG_TARGET="${LOG_FILE}"
+fi
 
 : "${TRAINING_DASHBOARD_HOST:=0.0.0.0}"
 : "${TRAINING_DASHBOARD_PORT:=7861}"
 export GRADIO_SERVER_NAME="${TRAINING_DASHBOARD_HOST}"
 export GRADIO_SERVER_PORT="${TRAINING_DASHBOARD_PORT}"
 
-nohup python3 scripts/run_training_dashboard.py "$@" >"${LOG_FILE}" 2>&1 &
+nohup python3 scripts/run_training_dashboard.py "$@" >"${LOG_TARGET}" 2>&1 &
 PID=$!
 printf "training_dashboard %s\n" "${PID}" >> "${PROCESS_REGISTRY}"
-echo "Training dashboard started on ${TRAINING_DASHBOARD_HOST}:${TRAINING_DASHBOARD_PORT} (PID ${PID}). Logs: ${LOG_FILE}"
+if [[ -n "${LOG_FILE}" ]]; then
+	echo "Training dashboard started on ${TRAINING_DASHBOARD_HOST}:${TRAINING_DASHBOARD_PORT} (PID ${PID}). Logs: ${LOG_FILE}"
+else
+	echo "Training dashboard started on ${TRAINING_DASHBOARD_HOST}:${TRAINING_DASHBOARD_PORT} (PID ${PID}). Logs handled by application logger (DISABLE_SCRIPT_LOG_FILES=1)."
+fi

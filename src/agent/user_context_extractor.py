@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 import json
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional, Set, List
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
 
@@ -157,11 +157,17 @@ class UserContextExtractor:
             r'user_id[：:=\s]+(\d+)',
             r'用户编号[：:\s]*(\d+)',
             r'用户[：:\s]+(\d{1,6})\b',  # "用户 1" 或 "用户:1"，限制1-6位
+            r'(?:会员|账号|帐户|account)号?[：:\s]*(\d{1,10})',
+            r'(?:用户|会员|账号|帐户)\s*(?:ID|编号)?\s*(?:是|为|=)\s*(\d{1,10})',
+            r'(?:我的|本人的)?\s*用户\s*ID\s*(?:是|为)\s*(\d{1,10})',
+            r'(?:ID|account id)\s*(?:是|为|=)\s*(\d{1,10})',
+            r'user\s*id\s*(?:is|=)\s*(\d{1,10})',
         ],
         'phone': [
             r'(?:电话|手机|联系方式)[：:：\s]+(1[3-9]\d{9})',
             r'(?:phone|mobile|contact_phone)[：:=\s]+(1[3-9]\d{9})',
             r'\b(1[3-9]\d{9})\b',  # 直接匹配手机号
+            r'(?:注册|绑定|预留)?(?:电话|手机|手机号|联系电话)\s*(?:是|为|=)?\s*(1[3-9]\d{9})',
         ],
         'order_id': [
             # 只匹配完整的订单号格式（ORD开头 + 至少15位数字）
@@ -176,8 +182,16 @@ class UserContextExtractor:
         'address': [
             r'(?:地址|配送地址)[：:：\s]+([^，。,\n]{4,50})',
             r'(?:address|shipping_address)[：:=\s]+([^,\n]{4,50})',
+            r'(?:送到|寄到)[：:：\s]+([^，。,"\n]{4,50})',
         ],
     }
+
+    USER_ID_KEYS = {"user_id", "userid", "userId", "uid", "member_id", "account_id", "customer_id"}
+    PHONE_KEYS = {"phone", "mobile", "contact_phone", "contact", "tel", "telephone"}
+    ADDRESS_KEYS = {"address", "shipping_address", "delivery_address", "addr"}
+    ORDER_ID_KEYS = {"order_id", "orderid", "order_no", "order_number", "orderno", "order"}
+    PRODUCT_ID_KEYS = {"product_id", "productid", "sku_id", "sku", "item_id"}
+    PRODUCT_COLLECTION_KEYS = {"items", "products", "cart_items", "results"}
     
     def __init__(self):
         """初始化提取器"""
@@ -269,54 +283,19 @@ class UserContextExtractor:
         context = UserContext()
         
         for tool_call in tool_calls:
-            tool_name = tool_call.get('tool', '')
-            tool_input = tool_call.get('input', {})
-            observation = tool_call.get('observation', '')
-            
-            # 从输入参数中提取
-            if isinstance(tool_input, dict):
-                if 'user_id' in tool_input:
-                    try:
-                        context.user_id = int(tool_input['user_id'])
-                    except (ValueError, TypeError):
-                        pass
-                
-                if 'product_id' in tool_input:
-                    try:
-                        product_id = int(tool_input['product_id'])
-                        # 只保留合理范围的商品ID
-                        if 1 <= product_id <= 9999:
-                            context.viewed_product_ids.add(product_id)
-                            context.recent_product_id = product_id
-                    except (ValueError, TypeError):
-                        pass
-                
-                if 'shipping_address' in tool_input:
-                    context.address = str(tool_input['shipping_address'])
-                
-                if 'contact_phone' in tool_input:
-                    phone = str(tool_input['contact_phone'])
-                    if self._is_valid_phone(phone):
-                        context.phone = phone
-                
-                if 'order_id' in tool_input:
-                    order_id = str(tool_input['order_id'])
-                    # 只保留有效的订单号格式
-                    if order_id.startswith('ORD') and len(order_id) >= 18:
-                        context.order_ids.add(order_id)
-                        context.recent_order_id = order_id
-            
-            # 从工具输出中提取订单号（订单创建工具）
-            if 'create_order' in tool_name.lower():
-                # 尝试从observation中提取订单号
+            tool_name = str(tool_call.get('tool', '')).lower()
+            tool_input = tool_call.get('input')
+            observation = tool_call.get('observation')
+
+            self._harvest_from_payload(tool_input, context)
+            self._harvest_from_payload(observation, context)
+
+            if 'create_order' in tool_name:
                 extracted = self.extract_from_text(str(observation))
                 if extracted.recent_order_id:
-                    # 验证订单号格式
                     if extracted.recent_order_id.startswith('ORD') and len(extracted.recent_order_id) >= 18:
                         context.order_ids.add(extracted.recent_order_id)
                         context.recent_order_id = extracted.recent_order_id
-                
-                # 同时尝试从工具输入的返回值中提取
                 if isinstance(tool_input, str):
                     extracted_input = self.extract_from_text(tool_input)
                     if extracted_input.recent_order_id:
@@ -365,6 +344,117 @@ class UserContextExtractor:
             )
         
         return context
+    
+    def _harvest_from_payload(self, payload: Any, context: UserContext):
+        """从任意数据结构中提取信息."""
+        if payload is None:
+            return
+
+        if isinstance(payload, str):
+            stripped = payload.strip()
+            if not stripped:
+                return
+            parsed = self._try_parse_json(stripped)
+            if parsed is not None and parsed is not payload:
+                self._harvest_from_payload(parsed, context)
+                return
+            nested = self.extract_from_text(stripped)
+            context.merge(nested)
+            return
+
+        if isinstance(payload, dict):
+            self._harvest_from_mapping(payload, context)
+            return
+
+        if isinstance(payload, list):
+            for item in payload:
+                self._harvest_from_payload(item, context)
+            return
+
+        if isinstance(payload, (int, float)):
+            self._record_numeric_candidate(payload, context)
+
+    def _harvest_from_mapping(self, data: Dict[str, Any], context: UserContext):
+        for key, value in data.items():
+            lowered = str(key).strip().lower()
+            if not lowered:
+                continue
+
+            if lowered == "result" and isinstance(value, str):
+                parsed = self._try_parse_json(value)
+                if parsed is not None:
+                    self._harvest_from_payload(parsed, context)
+                    continue
+
+            if lowered in self.PRODUCT_COLLECTION_KEYS and isinstance(value, list):
+                self._harvest_from_payload(value, context)
+                continue
+
+            self._process_structured_field(lowered, value, context)
+
+    def _process_structured_field(self, key: str, value: Any, context: UserContext):
+        if key in self.USER_ID_KEYS:
+            user_id = self._safe_int(value)
+            if user_id is not None:
+                context.user_id = user_id
+            return
+
+        if key in self.PHONE_KEYS:
+            phone = str(value).strip()
+            if self._is_valid_phone(phone):
+                context.phone = phone
+            return
+
+        if key in self.ADDRESS_KEYS:
+            address = str(value).strip()
+            if len(address) >= 4:
+                context.address = address
+            return
+
+        if key in self.ORDER_ID_KEYS:
+            order_id = str(value).strip()
+            if self.is_valid_order_id(order_id):
+                context.order_ids.add(order_id)
+                context.recent_order_id = order_id
+            return
+
+        if key in self.PRODUCT_ID_KEYS:
+            product_id = self._safe_int(value)
+            self._record_product_id(product_id, context)
+            return
+
+        if isinstance(value, (dict, list)):
+            self._harvest_from_payload(value, context)
+            return
+
+        if isinstance(value, str):
+            nested = self.extract_from_text(value)
+            context.merge(nested)
+
+    def _record_product_id(self, product_id: Optional[int], context: UserContext):
+        if product_id is None:
+            return
+        if 1 <= product_id <= 9999:
+            context.viewed_product_ids.add(product_id)
+            context.recent_product_id = product_id
+
+    def _record_numeric_candidate(self, value: float, context: UserContext):
+        int_value = self._safe_int(value)
+        self._record_product_id(int_value, context)
+
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _try_parse_json(value: str) -> Optional[Any]:
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
     
     @staticmethod
     def _is_valid_phone(phone: str) -> bool:
@@ -415,6 +505,27 @@ class UserContextManager:
             self.history.append(self.context.to_dict())
             self.context.merge(new_context)
             LOGGER.info("用户上下文已更新: %s", self._format_summary())
+
+    def ingest_tool_call(self, tool_name: str, tool_input: Any, observation: Any):
+        """基于单次工具交互更新上下文（实时应用场景）"""
+        snapshot = [{"tool": tool_name, "input": tool_input, "observation": observation}]
+        extracted = self.extractor.extract_from_tool_calls(snapshot)
+        if extracted.is_empty():
+            return
+        self.history.append(self.context.to_dict())
+        self.context.merge(extracted)
+        LOGGER.info("用户上下文快速更新: %s", self._format_summary())
+
+    def ingest_free_text(self, text: str):
+        """直接基于原始文本内容更新上下文（无须等待完整对话存档）。"""
+        if not text:
+            return
+        extracted = self.extractor.extract_from_text(text)
+        if extracted.is_empty():
+            return
+        self.history.append(self.context.to_dict())
+        self.context.merge(extracted)
+        LOGGER.info("用户上下文已根据文本更新: %s", self._format_summary())
 
     def set_recent_order(self, order_id: str):
         """显式设置最近订单号（带验证），并记录历史快照

@@ -144,18 +144,22 @@ class RuleBasedRecognizer(BaseIntentRecognizer):
             r"加购|加入购物车|放进|买这个",
             r"add.*cart|buy",
         ],
+        # 购买意图 - 高优先级,识别明确购买语气
+        IntentCategory.CHECKOUT: [
+            r"给我来.*[台件个]|要.*[台件个]|来.*[台件个]",
+            r"给我.*[0-9一二三四五六七八九十]+.*[台件个]",
+            r"下单|结账|支付|购买|确认订单",
+            r"checkout|order|pay|purchase",
+        ],
         # 推荐意图 - 提高优先级，放在 VIEW_CART 之前
         IntentCategory.RECOMMENDATION: [
             r"推荐|建议|什么好|帮我选|有什么.*推荐|什么.*产品|什么.*好|好的.*推荐|有哪些.*推荐",
+            r"想买|买个|买一台|买一个|买点|购入|购置|入手",
             r"recommend|suggest|best|what.*good|any.*recommendation",
         ],
         IntentCategory.VIEW_CART: [
             r"购物车里|看看购物车|购物车.*有|我的购物车",
             r"cart|shopping.*cart|my.*cart",
-        ],
-        IntentCategory.CHECKOUT: [
-            r"下单|结账|支付|购买|确认订单",
-            r"checkout|order|pay|purchase",
         ],
         IntentCategory.ORDER_STATUS: [
             r"订单|订单状态|我的订单",
@@ -174,7 +178,7 @@ class RuleBasedRecognizer(BaseIntentRecognizer):
             r"chart|graph|plot|trend|bar|pie|visualize",
         ],
         IntentCategory.GREETING: [
-            r"你好|嗨|hello|hi|早上好|晚上好",
+            r"你好|嗨|hello|hi|早上好|晚上好|在吗|有人吗|辛苦了|您好|喂|哈喽|最近怎么样",
         ],
     }
 
@@ -188,6 +192,10 @@ class RuleBasedRecognizer(BaseIntentRecognizer):
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         self.default_confidence = self.config.get("default_confidence", 0.6)
+        # 定义高优先级意图 - 如果匹配则优先返回
+        self.high_priority_intents = {
+            IntentCategory.CHECKOUT,  # 购买意图优先级最高
+        }
     
     def get_confidence(self) -> float:
         return self.default_confidence
@@ -222,7 +230,12 @@ class RuleBasedRecognizer(BaseIntentRecognizer):
                     raw_input=user_input,
                 )
             )
-
+        
+        # 如果匹配到高优先级意图,只返回高优先级意图
+        high_priority_matches = [m for m in matches if m.category in self.high_priority_intents]
+        if high_priority_matches:
+            return high_priority_matches
+        
         return matches
     
     def _extract_entities(self, text: str) -> Dict[str, Any]:
@@ -373,7 +386,8 @@ class EmbeddingIntentRecognizer(BaseIntentRecognizer):
         ],
         IntentCategory.RECOMMENDATION: [
             "推荐一些商品", "有什么好的推荐", "帮我选择产品", "什么产品比较好",
-            "有什么好的电子产品", "给我推荐一下", "什么值得买"
+            "有什么好的电子产品", "给我推荐一下", "什么值得买", "我想买个手机",
+            "我想买点东西", "买手机推荐"
         ],
         IntentCategory.VIEW_CART: [
             "我的购物车里有什么", "查看购物车", "购物车商品", "购物车里有啥"
@@ -397,7 +411,8 @@ class EmbeddingIntentRecognizer(BaseIntentRecognizer):
             "有货吗", "库存情况", "还有吗", "能买到吗"
         ],
         IntentCategory.GREETING: [
-            "你好", "嗨", "早上好", "在吗"
+            "你好", "嗨", "早上好", "在吗", "有人吗", "哈喽", "晚上好", "最近怎么样",
+            "辛苦了", "您好啊"
         ],
     }
     
@@ -534,14 +549,20 @@ class HybridIntentRecognizer(BaseIntentRecognizer):
     
     def recognize(self, user_input: str, turn_id: int = 0) -> List[Intent]:
         """按优先级顺序尝试识别，直到获得高置信度结果"""
+        best_fallback: Optional[Intent] = None
+        best_strategy: Optional[str] = None
+
         for strategy in self.priority:
             recognizer = self.recognizers.get(strategy)
             if recognizer is None:
+                logger.debug("意图识别策略 %s 未启用或识别器不可用", strategy)
                 continue
             
             try:
+                logger.info("尝试意图识别策略: %s", strategy)
                 intents = recognizer.recognize(user_input, turn_id)
                 if not intents:
+                    logger.debug("意图识别 [%s] 未返回结果，继续尝试下一策略", strategy)
                     continue
                 
                 best_intent = intents[0]
@@ -552,24 +573,45 @@ class HybridIntentRecognizer(BaseIntentRecognizer):
                 
                 # 如果置信度足够高，直接返回
                 if best_intent.confidence >= self.high_confidence_threshold:
-                    logger.info(f"使用 {strategy} 识别结果 (高置信度)")
+                    logger.info(
+                        "使用 %s 识别结果 (置信度 %.2f ≥ 阈值 %.2f)",
+                        strategy,
+                        best_intent.confidence,
+                        self.high_confidence_threshold,
+                    )
                     return intents
                 
                 # 否则尝试下一个策略
                 if best_intent.category != IntentCategory.UNKNOWN:
-                    # 保存低置信度结果作为备选
-                    fallback_intent = best_intent
+                    if (
+                        best_fallback is None
+                        or best_intent.confidence > best_fallback.confidence
+                    ):
+                        best_fallback = best_intent
+                        best_strategy = strategy
+                        logger.debug(
+                            "记录 %s 作为备选意图: %s (置信度 %.2f)",
+                            strategy,
+                            best_intent.category.value,
+                            best_intent.confidence,
+                        )
             
             except Exception as e:
                 logger.error(f"意图识别器 [{strategy}] 失败: {e}")
                 continue
         
-        # 所有策略都失败或置信度不足，返回最后的结果
-        if 'fallback_intent' in locals():
-            logger.info(f"使用备选识别结果: {fallback_intent.category.value}")
-            return [fallback_intent]
+        # 所有策略都失败或置信度不足，返回最佳备选
+        if best_fallback is not None:
+            logger.info(
+                "使用备选识别结果: %s (来自 %s, 置信度 %.2f)",
+                best_fallback.category.value,
+                best_strategy,
+                best_fallback.confidence,
+            )
+            return [best_fallback]
         
         # 实在没办法，返回 UNKNOWN
+        logger.info("所有意图识别策略均未匹配，返回 UNKNOWN")
         return [Intent(
             category=IntentCategory.UNKNOWN,
             confidence=0.3,

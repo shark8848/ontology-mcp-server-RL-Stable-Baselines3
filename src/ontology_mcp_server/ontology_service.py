@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Dict, Any, Tuple
 
 from rdflib import Graph, Namespace
@@ -89,9 +90,31 @@ class OntologyService:
         ttl_path = self.settings.ttl_path
         if not ttl_path.exists():
             return None
+        temp_path: Path | None = None
         try:
             world = World()
-            onto = world.get_ontology(f"file://{ttl_path}").load()
+            source_path = ttl_path
+            if ttl_path.suffix.lower() in {".ttl", ".n3", ".nt"}:
+                try:
+                    graph = Graph()
+                    graph.parse(ttl_path, format="turtle")
+                    with NamedTemporaryFile(suffix=".owl", delete=False) as tmp:
+                        graph.serialize(tmp.name, format="xml")
+                        temp_path = Path(tmp.name)
+                        source_path = temp_path
+                    self.logger.debug(
+                        "折扣推理[owlready2] 已将 %s 转换为 RDF/XML 临时文件: %s",
+                        ttl_path,
+                        source_path,
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "折扣推理[owlready2] 转换 TTL -> RDF/XML 失败，直接加载原文件: %s",
+                        exc,
+                    )
+                    temp_path = None
+
+            onto = world.get_ontology(f"file://{source_path}").load()
             Customer = getattr(onto, "Customer", None)
             VIPCustomer = getattr(onto, "VIPCustomer", None)
             Order = getattr(onto, "Order", None)
@@ -122,6 +145,12 @@ class OntologyService:
         except Exception:
             self.logger.exception("折扣推理[推理方式=owlready2] 执行出错，放弃：")
             return None
+        finally:
+            if temp_path:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
         return None
 
     def normalize_product(self, text: str) -> Dict[str, Any]:

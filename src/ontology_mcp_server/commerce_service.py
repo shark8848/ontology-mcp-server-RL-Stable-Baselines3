@@ -475,6 +475,26 @@ class CommerceService:
         if upgrade_info["should_upgrade"]:
             self.users.update_user_level(user_id, upgrade_info["inferred_level"])
 
+        # 自动创建物流记录
+        from datetime import timedelta
+        carrier = shipping_info.get("carrier", "顺丰速运")
+        estimated_days = shipping_info.get("estimated_days", 3)
+        estimated_delivery = datetime.now() + timedelta(days=estimated_days)
+        
+        try:
+            shipment = self.shipments.create_shipment(
+                order_id=order_data["order_id"],
+                carrier=carrier,
+                estimated_delivery=estimated_delivery
+            )
+            LOGGER.info(
+                "订单 %s 已自动生成物流信息: tracking_no=%s",
+                order_data["order_id"],
+                shipment.tracking_no
+            )
+        except Exception as exc:
+            LOGGER.warning("自动创建物流记录失败: %s", exc)
+
         return {
             "order": order_data,
             "inference": inference,

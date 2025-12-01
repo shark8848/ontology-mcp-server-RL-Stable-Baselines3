@@ -133,7 +133,8 @@ class AnalyticsService:
         current = start_date
         while current <= end_date:
             date_key = current.strftime('%Y-%m-%d')
-            labels.append(current.strftime('%m-%d'))
+            # 使用完整日期格式，避免 Plotly 将其解析为错误的年份
+            labels.append(current.strftime('%Y-%m-%d'))
             counts.append(date_counts.get(date_key, 0))
             amounts.append(date_amounts.get(date_key, 0))
             current += timedelta(days=1)

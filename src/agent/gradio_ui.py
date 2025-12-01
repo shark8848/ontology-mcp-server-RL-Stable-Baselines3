@@ -109,6 +109,13 @@ LOG_STEP_SNIPPET_CHARS = _resolve_int_setting(
     _DEFAULT_STEP_SNIPPET,
 )
 
+_DEFAULT_MAX_ITERATIONS = 12
+AGENT_MAX_ITERATIONS = _resolve_int_setting(
+    "AGENT_MAX_ITERATIONS",
+    _AGENT_CONFIG.get("max_iterations"),
+    _DEFAULT_MAX_ITERATIONS,
+)
+
 # 生成唯一会话ID
 SESSION_ID = os.getenv("AGENT_SESSION_ID", f"{MEMORY_CONFIG.session.default_session_prefix}_{uuid.uuid4().hex[:8]}")
 
@@ -119,6 +126,7 @@ AGENT = LangChainAgent(
     persist_directory=None,  # 从配置读取
     max_results=None,  # 从配置读取
     use_similarity_search=None,  # 从配置读取
+    max_iterations=AGENT_MAX_ITERATIONS,
     enable_conversation_state=True,  # Phase 4: 对话状态跟踪
     enable_system_prompt=True,  # Phase 4: 电商专用提示词
     enable_quality_tracking=True,  # Phase 4: 质量跟踪
@@ -127,6 +135,7 @@ AGENT = LangChainAgent(
 )
 LOGGER.info("会话ID: %s (后端: %s, 检索模式: %s)", 
            SESSION_ID, MEMORY_CONFIG.backend, MEMORY_CONFIG.strategy.retrieval_mode)
+LOGGER.info("Agent max_iterations=%s", AGENT_MAX_ITERATIONS)
 
 # 全局执行日志历史 - 保存所有对话的执行日志
 EXECUTION_LOG_HISTORY = []
@@ -167,9 +176,8 @@ def _format_observation_for_ui(observation, *, max_chars: int = LOG_MAX_CHARS):
     """格式化工具/日志结果，尽量保留完整 JSON。"""
 
     def _truncate(text: str) -> str:
-        if len(text) <= max_chars:
-            return text
-        return f"{text[:max_chars]}... (已截断)"
+        # 应业务要求，聊天中展示工具结果不得截断
+        return text
 
     if isinstance(observation, (dict, list)):
         pretty = json.dumps(observation, ensure_ascii=False, indent=2)
@@ -318,7 +326,11 @@ def format_plan_history() -> str:
         if not plan or plan == "(no plan provided)":
             lines.append("> *此对话无计划*")
         else:
-            lines.append(plan)
+            # 处理plan可能是列表的情况
+            if isinstance(plan, list):
+                lines.extend(plan)  # 列表中的每个元素都应该是字符串
+            else:
+                lines.append(str(plan))  # 确保转换为字符串
         
         lines.append("")
         lines.append("---\n")  # 对话间分隔线
@@ -1104,6 +1116,29 @@ def handle_user_message(user_message, chat_history=None, show_thinking=True):
                         gr.update(),
                         gr.update(),
                     )
+
+                elif step_type == "tool_calling":
+                    tool_name = metadata.get("tool", "工具")
+                    args_preview = metadata.get("arguments")
+                    if isinstance(args_preview, dict):
+                        arg_text = json.dumps(args_preview, ensure_ascii=False)
+                        if len(arg_text) > 80:
+                            arg_text = arg_text[:80] + "..."
+                    elif args_preview is None:
+                        arg_text = ""
+                    else:
+                        arg_text = str(args_preview)[:80]
+                    detail = f"参数: {arg_text}" if arg_text else ""
+                    thinking_steps.append(f"\n   ↳ 调用 `{tool_name}` {detail}")
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
                 
                 elif step_type == "tool_results":
                     tool_names = metadata.get("tool_names", [])
@@ -1122,6 +1157,22 @@ def handle_user_message(user_message, chat_history=None, show_thinking=True):
                             gr.update(),
                             gr.update(),
                         )
+
+                elif step_type == "tool_result":
+                    tool_name = metadata.get("tool", "工具")
+                    preview = metadata.get("observation_preview") or content
+                    if isinstance(preview, str) and len(preview) > 120:
+                        preview = preview[:120] + "..."
+                    thinking_steps.append(f"\n📥 `{tool_name}` 返回: {preview}")
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
                 
                 elif step_type == "llm_streaming_start":
                     thinking_steps.append(f"\n💬 **{content}**")
@@ -1140,6 +1191,18 @@ def handle_user_message(user_message, chat_history=None, show_thinking=True):
                     accumulated = metadata.get("accumulated", "")
                     # 清除之前的思考步骤，只保留累积的答案
                     assistant_placeholder["content"] = accumulated
+                    yield (
+                        gr.update(value=chat_history),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                        gr.update(),
+                    )
+
+                elif step_type == "error":
+                    thinking_steps.append(f"\n⚠️ **{content}**")
+                    assistant_placeholder["content"] = "\n".join(thinking_steps)
                     yield (
                         gr.update(value=chat_history),
                         gr.update(),
@@ -1654,6 +1717,14 @@ with gr.Blocks(
                     value=True,
                     info="勾选后将实时显示 AI 的分析和工具调用过程"
                 )
+                iteration_slider = gr.Slider(
+                    minimum=4,
+                    maximum=20,
+                    step=1,
+                    value=AGENT_MAX_ITERATIONS,
+                    label="最大推理轮次",
+                    info="调节单次对话的 LLM 推理迭代上限，以便在界面中快速测试不同效果"
+                )
             
             with gr.Row():
                 txt = gr.Textbox(show_label=False, placeholder="在这里输入你的请求", lines=2, scale=4)
@@ -1695,7 +1766,7 @@ with gr.Blocks(
                             elem_classes="tab-content"
                         )
 
-    def submit_and_update(message, history, show_thinking):
+    def submit_and_update(message, history, show_thinking, max_iterations):
         """提交消息并更新所有面板 - 先显示用户消息，再获取回复
         
         Args:
@@ -1705,6 +1776,14 @@ with gr.Blocks(
         """
         # 第一步：立即显示用户消息（Assistant回复为"思考中..."）并禁用所有按钮
         base_history = _normalize_chatbot_messages(history)
+        try:
+            iteration_limit = int(max_iterations)
+        except (TypeError, ValueError):
+            iteration_limit = AGENT_MAX_ITERATIONS
+        iteration_limit = max(1, iteration_limit)
+        if AGENT.max_iterations != iteration_limit:
+            LOGGER.info("临时调整 max_iterations=%s (原=%s)", iteration_limit, AGENT.max_iterations)
+        AGENT.max_iterations = iteration_limit
         pending_history = base_history + [
             {"role": "user", "content": message},
             {"role": "assistant", "content": "⏳ 正在思考..."},
@@ -1756,55 +1835,55 @@ with gr.Blocks(
             )
     
     # 🎯 快捷短语函数 - 预设测试查询（使用生成器）
-    def quick_phrase_1(history, show_thinking):
+    def quick_phrase_1(history, show_thinking, max_iterations):
         """查询用户等级推理"""
         message = "查询用户ID为1的用户等级，并解释推理过程"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_2(history, show_thinking):
+    def quick_phrase_2(history, show_thinking, max_iterations):
         """查询折扣推理"""
         message = "用户ID 1购买金额15000元，查询可用的折扣优惠，并解释推理依据"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_3(history, show_thinking):
+    def quick_phrase_3(history, show_thinking, max_iterations):
         """查询物流方案"""
         message = "查询用户ID 1的物流配送方案，包括运费和预计送达时间"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_4(history, show_thinking):
+    def quick_phrase_4(history, show_thinking, max_iterations):
         """查询退货政策"""
         message = "用户ID 1购买了AirPods Pro 2（配件类商品），已拆封但包装完好，能否退货？"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_5(history, show_thinking):
+    def quick_phrase_5(history, show_thinking, max_iterations):
         """搜索商品"""
         message = "搜索iPhone相关的商品，显示名称、价格和库存"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_6(history, show_thinking):
+    def quick_phrase_6(history, show_thinking, max_iterations):
         """创建测试订单"""
         message = "用户ID 1购买2台iPhone 15 Pro（商品ID 2），配送地址：成都武侯区，电话：15308215756"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_7(history, show_thinking):
+    def quick_phrase_7(history, show_thinking, max_iterations):
         """商品规范化测试"""
         message = "规范化查询：苹果15手机"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_8(history, show_thinking):
+    def quick_phrase_8(history, show_thinking, max_iterations):
         """SHACL校验测试"""
         message = "验证订单数据：用户ID 1，商品ID 2，数量3，地址成都，电话15308215756，是否符合SHACL规则"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_9(history, show_thinking):
+    def quick_phrase_9(history, show_thinking, max_iterations):
         """完整推理流程"""
-        message = "完整演示本体推理流程：用户ID 1，订单金额20000元，包含用户等级推理、折扣计算、物流方案、SHACL校验"
-        yield from submit_and_update(message, history, show_thinking)
+        message = "完整演示本体推理流程：用户ID 1，我有20000元，我爱苹果和耳机, 请尽可能把这钱花完，帮我下个订单,并输出最终订单清单"
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
     
-    def quick_phrase_10(history, show_thinking):
+    def quick_phrase_10(history, show_thinking, max_iterations):
         """用户消费分析"""
         message = "分析用户ID 1的消费情况，包括累计消费、等级变化和推荐策略"
-        yield from submit_and_update(message, history, show_thinking)
+        yield from submit_and_update(message, history, show_thinking, max_iterations)
 
     # 绑定事件 - 输出包含所有需要更新的组件
     outputs = [
@@ -1814,21 +1893,21 @@ with gr.Blocks(
         quick_btn6, quick_btn7, quick_btn8, quick_btn9, quick_btn10
     ]
     
-    submit.click(submit_and_update, [txt, chatbot, show_thinking_checkbox], outputs)
-    txt.submit(submit_and_update, [txt, chatbot, show_thinking_checkbox], outputs)
+    submit.click(submit_and_update, [txt, chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    txt.submit(submit_and_update, [txt, chatbot, show_thinking_checkbox, iteration_slider], outputs)
     clear_btn.click(clear_conversation, None, [chatbot, plan_md, tool_md, memory_md, ecommerce_md, execution_log_md])
     
     # 🎯 绑定快捷按钮事件
-    quick_btn1.click(quick_phrase_1, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn2.click(quick_phrase_2, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn3.click(quick_phrase_3, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn4.click(quick_phrase_4, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn5.click(quick_phrase_5, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn6.click(quick_phrase_6, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn7.click(quick_phrase_7, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn8.click(quick_phrase_8, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn9.click(quick_phrase_9, [chatbot, show_thinking_checkbox], outputs)
-    quick_btn10.click(quick_phrase_10, [chatbot, show_thinking_checkbox], outputs)
+    quick_btn1.click(quick_phrase_1, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn2.click(quick_phrase_2, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn3.click(quick_phrase_3, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn4.click(quick_phrase_4, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn5.click(quick_phrase_5, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn6.click(quick_phrase_6, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn7.click(quick_phrase_7, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn8.click(quick_phrase_8, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn9.click(quick_phrase_9, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
+    quick_btn10.click(quick_phrase_10, [chatbot, show_thinking_checkbox, iteration_slider], outputs)
 
 
 def _env_flag(name: str) -> bool:

@@ -10,9 +10,15 @@ from __future__ import annotations
 """基于 OpenAI 函数调用的轻量智能体封装，支持对话记忆。"""
 
 import json
+import threading
+import time
 import yaml
+from copy import deepcopy
+from dataclasses import asdict, is_dataclass
+from queue import SimpleQueue
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Set
+from datetime import datetime
 
 from .llm_deepseek import get_default_chat_model
 from .logger import get_logger
@@ -165,6 +171,9 @@ class LangChainAgent:
             self.query_rewriter = QueryRewriter(llm=self.llm, config=query_rewriter_config)
             logger.info("已启用查询改写器")
 
+        ui_config = self.config.get("ui", {}) if isinstance(self.config, dict) else {}
+        self.simulated_stream_delay = float(ui_config.get("simulated_stream_delay", 0.08))
+
         # 强制本体/SHACL 校验相关状态
         self._pending_validation: Optional[Dict[str, Any]] = None
         self._validation_issued_turn: Optional[int] = None
@@ -177,6 +186,41 @@ class LangChainAgent:
             "不能生成柱状图",
             "工具已被禁用",
         ]
+        
+        # Phase 6: 人工确认机制
+        self.CRITICAL_TOOLS = {
+            "commerce_create_order": {
+                "name": "创建订单",
+                "risk_level": "high",
+                "requires_confirmation": True
+            },
+            "commerce_process_payment": {
+                "name": "处理支付",
+                "risk_level": "critical",
+                "requires_confirmation": True
+            },
+            "commerce_cancel_order": {
+                "name": "取消订单",
+                "risk_level": "high",
+                "requires_confirmation": True
+            },
+            "commerce_update_order_status": {
+                "name": "更新订单状态",
+                "risk_level": "medium",
+                "requires_confirmation": True
+            },
+            "ontology_validate_order": {
+                "name": "订单SHACL校验",
+                "risk_level": "critical",
+                "requires_confirmation": False,
+            }
+        }
+        self.pending_confirmations: List[Dict[str, Any]] = []
+        self.confirmation_mode: bool = False
+        
+        # Phase 7: 产品验证层 - 追踪最近搜索到的product_id
+        self.recent_search_product_ids: Set[int] = set()  # 最近搜索到的产品ID集合
+        self.last_search_results: Dict[str, Any] = {}  # 最近一次搜索结果缓存
         
         # 加载记忆配置
         memory_config = get_memory_config()
@@ -332,13 +376,43 @@ class LangChainAgent:
             return
 
         reminder = (
-            "【系统强制校验】检测到用户已进入结算/下单阶段。"
-            "请立即调用工具 `ontology_validate_order`，确保订单数据通过 SHACL 校验。"
+            "【系统硬性要求】订单生成后禁止继续回复。"
+            "必须立即调用 `ontology_validate_order` 完成 SHACL 校验，"
+            "否则系统将终止本轮输出。"
             "如需示例参数，可参考: "
             f"{json.dumps(payload, ensure_ascii=False)}"
         )
         messages.append({"role": "system", "content": reminder})
         self._validation_issued_turn = iteration
+
+    def _get_user_context(self) -> Optional[Any]:
+        """Safely fetch the latest user context from memory."""
+        if not self.memory or not hasattr(self.memory, "user_context_manager"):
+            return None
+        try:
+            return self.memory.user_context_manager.get_context()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("获取用户上下文失败: %s", exc)
+            return None
+
+    def _ingest_user_context_from_tool(self, tool_name: str, tool_args: Any, payload: Any) -> None:
+        """Push tool interaction data into the user context manager in real time."""
+        if not self.memory or not hasattr(self.memory, "user_context_manager"):
+            return
+        manager = self.memory.user_context_manager
+        try:
+            manager.ingest_tool_call(tool_name, tool_args, payload)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("即时更新用户上下文失败: %s", exc)
+
+    def _ingest_user_context_from_text(self, text: Optional[str]) -> None:
+        """Capture identifiers directly from user utterances."""
+        if not text or not self.memory or not hasattr(self.memory, "user_context_manager"):
+            return
+        try:
+            self.memory.user_context_manager.ingest_free_text(text)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("基于文本更新用户上下文失败: %s", exc)
 
     def _call_tool(self, name: str, args: Dict[str, Any]) -> str:
         """调用工具并返回结果"""
@@ -346,56 +420,979 @@ class LangChainAgent:
         if tool is None:
             logger.warning("LLM attempted to call unknown tool: %s", name)
             return f"未找到工具 {name}"
-        
-        # 记录工具对象信息
         tool_class = tool.__class__.__name__
         tool_module = tool.__class__.__module__
-        
+
         try:
-            if isinstance(args, str):
+            parsed_args: Any = args
+            if isinstance(parsed_args, str):
                 try:
-                    args = json.loads(args)
+                    parsed_args = json.loads(parsed_args)
                 except json.JSONDecodeError:
-                    args = {"_raw": args}
-            
-            # 记录解析前的参数
+                    parsed_args = {"_raw": parsed_args}
+
+            if not isinstance(parsed_args, dict):
+                parsed_args = {"_raw": parsed_args}
+
             logger.debug(f"调用工具 {name} (类: {tool_module}.{tool_class})")
-            
-            parsed = tool.parse_arguments(args)
+            parsed = tool.parse_arguments(parsed_args)
             result = tool.invoke(parsed)
-            
-            # 返回结果和元信息
+
+            safe_result = self._make_json_safe(result)
             return json.dumps({
                 "_tool_info": {
                     "class": tool_class,
                     "module": tool_module,
-                    "method": "invoke"
+                    "method": "invoke",
                 },
-                "result": result if isinstance(result, (dict, list, str, int, float, bool)) else str(result)
+                "result": safe_result,
             }, ensure_ascii=False)
-            
+
         except Exception as exc:  # pragma: no cover - defensive runtime logging
             logger.exception("Tool %s invocation failed", name)
             return json.dumps({
                 "_tool_info": {
                     "class": tool_class,
                     "module": tool_module,
-                    "method": "invoke"
+                    "method": "invoke",
                 },
-                "error": f"调用失败: {type(exc).__name__}: {str(exc)}"
+                "error": f"调用失败: {type(exc).__name__}: {str(exc)}",
             }, ensure_ascii=False)
 
-    def run(self, user_input: str) -> Dict[str, Any]:
+    def _prepare_order_arguments(self, args: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+        """Align commerce_create_order payload with tracked user context."""
+        sanitized = deepcopy(args) if args else {}
+        ctx = self._get_user_context()
+
+        if not ctx or ctx.user_id is None:
+            return sanitized, "missing_user_id"
+
+        try:
+            sanitized["user_id"] = int(ctx.user_id)
+        except (TypeError, ValueError):
+            return sanitized, "invalid_user_id"
+
+        items = sanitized.get("items")
+        if not items or not isinstance(items, list):
+            return sanitized, "missing_items"
+
+        target_product_id: Optional[int] = None
+        if getattr(ctx, "recent_product_id", None) is not None:
+            target_product_id = int(ctx.recent_product_id)
+        elif len(self.recent_search_product_ids) == 1:
+            target_product_id = next(iter(self.recent_search_product_ids))
+
+        if target_product_id is None:
+            return sanitized, "missing_product"
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item["product_id"] = target_product_id
+
+        return sanitized, None
+
+    @staticmethod
+    def _parse_tool_observation(observation: Any) -> Optional[Dict[str, Any]]:
+        """Extract structured payload from stored tool observation."""
+        data: Any = observation
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (TypeError, json.JSONDecodeError):
+                return None
+
+        if not isinstance(data, dict):
+            return None
+
+        payload: Any = data.get("result", data)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, json.JSONDecodeError):
+                return data
+
+        return payload if isinstance(payload, (dict, list)) else data
+
+    def _build_checkout_summary(self, tool_log: List[Dict[str, Any]]) -> Optional[str]:
+        """Generate a concise order/payment summary for the user."""
+        order_payload = None
+        payment_payload = None
+
+        for entry in reversed(tool_log):
+            tool_name = entry.get("tool")
+            if tool_name == "commerce_process_payment" and payment_payload is None:
+                payment_payload = self._parse_tool_observation(entry.get("observation"))
+            if tool_name == "commerce_create_order" and order_payload is None:
+                order_payload = self._parse_tool_observation(entry.get("observation"))
+            if order_payload and payment_payload:
+                break
+
+        if not order_payload and not payment_payload:
+            return None
+
+        order_info = None
+        if isinstance(order_payload, dict):
+            order_info = order_payload.get("order") or order_payload
+
+        payment_info = None
+        if isinstance(payment_payload, dict):
+            payment_info = payment_payload.get("payment") or payment_payload
+
+        lines: List[str] = ["✅ 已完成订单流程总结:"]
+
+        if isinstance(order_info, dict):
+            order_no = order_info.get("order_no") or order_info.get("order_id")
+            total_amount = order_info.get("final_amount") or order_info.get("total_amount")
+            status = order_info.get("order_status") or order_info.get("status")
+            if order_no:
+                lines.append(f"• 订单号: {order_no}")
+            if total_amount is not None:
+                lines.append(f"• 实付金额: ¥{float(total_amount):.2f}")
+            if status:
+                lines.append(f"• 当前状态: {status}")
+
+        if isinstance(payment_info, dict):
+            pay_status = payment_info.get("payment_status") or payment_info.get("status")
+            pay_method = payment_info.get("payment_method") or payment_info.get("method")
+            transaction_id = payment_info.get("transaction_id")
+            amount = payment_info.get("payment_amount") or payment_info.get("amount")
+            if pay_method:
+                lines.append(f"• 支付方式: {pay_method}")
+            if amount is not None:
+                lines.append(f"• 支付金额: ¥{float(amount):.2f}")
+            if pay_status:
+                lines.append(f"• 支付状态: {pay_status}")
+            if transaction_id:
+                lines.append(f"• 交易号: {transaction_id}")
+        else:
+            lines.append("• 订单已生成，等待支付确认。")
+
+        lines.append("如需调整订单或取消支付，请直接告知我。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _stringify_observation(value: Any) -> str:
+        """Convert arbitrary observation payload into a printable string."""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            try:
+                return str(value)
+            except Exception:  # pragma: no cover - extreme fallback
+                return ""
+
+    @staticmethod
+    def _make_json_safe(value: Any) -> Any:
+        """Convert tool outputs (including dataclasses) into JSON-safe data."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+
+        if is_dataclass(value):
+            try:
+                return LangChainAgent._make_json_safe(asdict(value))
+            except Exception:  # pragma: no cover - defensive guard
+                return str(value)
+
+        if isinstance(value, dict):
+            return {
+                str(key): LangChainAgent._make_json_safe(val)
+                for key, val in value.items()
+            }
+
+        if isinstance(value, (list, tuple, set)):
+            return [LangChainAgent._make_json_safe(item) for item in value]
+
+        if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
+            try:
+                return LangChainAgent._make_json_safe(value.to_dict())
+            except Exception:  # pragma: no cover - defensive guard
+                return str(value)
+
+        return str(value)
+
+    def _summarize_confirmation_result(self, tool_name: str, raw_result: Any) -> Optional[str]:
+        """Generate a friendly summary for confirmed high-risk tool outputs."""
+        payload = raw_result
+        if isinstance(raw_result, str):
+            try:
+                payload = json.loads(raw_result)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                payload = raw_result
+
+        if isinstance(payload, dict) and "result" in payload and len(payload) == 2 and "_tool_info" in payload:
+            payload = payload.get("result")
+
+        if tool_name == "commerce_create_order" and isinstance(payload, dict):
+            order = payload.get("order") or payload
+            if isinstance(order, dict):
+                lines = ["订单已创建成功，关键信息如下："]
+                order_no = order.get("order_no") or order.get("order_id")
+                total_amount = order.get("total_amount") or order.get("final_amount")
+                status = order.get("order_status") or order.get("status")
+                address = order.get("shipping_address")
+                phone = order.get("contact_phone")
+                if order_no:
+                    lines.append(f"• 订单号: {order_no}")
+                if total_amount is not None:
+                    lines.append(f"• 金额: ¥{float(total_amount):.2f}")
+                if status:
+                    lines.append(f"• 状态: {status}")
+                if address:
+                    lines.append(f"• 地址: {address}")
+                if phone:
+                    lines.append(f"• 电话: {phone}")
+                items = order.get("items")
+                if isinstance(items, list) and items:
+                    first_item = items[0]
+                    if isinstance(first_item, dict):
+                        name = first_item.get("product_name") or first_item.get("product_id")
+                        qty = first_item.get("quantity")
+                        lines.append(f"• 商品: {name} × {qty}")
+                return "\n".join(lines)
+
+        if tool_name == "commerce_process_payment" and isinstance(payload, dict):
+            payment = payload.get("payment") or payload
+            if isinstance(payment, dict):
+                lines = ["支付已完成："]
+                transaction_id = payment.get("transaction_id")
+                amount = payment.get("payment_amount") or payment.get("amount")
+                method = payment.get("payment_method") or payment.get("method")
+                status = payment.get("payment_status") or payment.get("status")
+                if amount is not None:
+                    lines.append(f"• 金额: ¥{float(amount):.2f}")
+                if method:
+                    lines.append(f"• 支付方式: {method}")
+                if transaction_id:
+                    lines.append(f"• 交易号: {transaction_id}")
+                if status:
+                    lines.append(f"• 状态: {status}")
+                return "\n".join(lines)
+
+        if isinstance(payload, (dict, list)):
+            try:
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            except (TypeError, ValueError):
+                pass
+
+        return str(raw_result) if raw_result is not None else None
+
+        tool_class = tool.__class__.__name__
+        tool_module = tool.__class__.__module__
+
+        try:
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {"_raw": args}
+
+            logger.debug(f"调用工具 {name} (类: {tool_module}.{tool_class})")
+            parsed = tool.parse_arguments(args)
+            result = tool.invoke(parsed)
+
+            return json.dumps({
+                "_tool_info": {
+                    "class": tool_class,
+                    "module": tool_module,
+                    "method": "invoke",
+                },
+                "result": result if isinstance(result, (dict, list, str, int, float, bool)) else str(result),
+            }, ensure_ascii=False)
+
+        except Exception as exc:  # pragma: no cover - defensive runtime logging
+            logger.exception("Tool %s invocation failed", name)
+            return json.dumps({
+                "_tool_info": {
+                    "class": tool_class,
+                    "module": tool_module,
+                    "method": "invoke",
+                },
+                "error": f"调用失败: {type(exc).__name__}: {str(exc)}",
+            }, ensure_ascii=False)
+
+    def _query_product_details(self, product_id: int) -> Optional[Dict[str, Any]]:
+        """查询商品详细信息用于确认提示
+        
+        Args:
+            product_id: 商品ID
+            
+        Returns:
+            Dict: 商品信息 {product_id, product_name, brand, price, category}
+            None: 查询失败
+        """
+        try:
+            # 使用commerce_get_product_detail工具查询
+            tool = self.tool_map.get("commerce_get_product_detail")
+            if not tool:
+                logger.warning("commerce_get_product_detail工具不可用")
+                return None
+            
+            result = tool.invoke({"product_id": product_id})
+            if isinstance(result, str):
+                result = json.loads(result)
+            
+            # 提取关键字段
+            if isinstance(result, dict) and "product_id" in result:
+                return {
+                    "product_id": result.get("product_id"),
+                    "product_name": result.get("product_name", "未知"),
+                    "brand": result.get("brand", "未知"),
+                    "price": result.get("price", 0.0),
+                    "category": result.get("category", "未知")
+                }
+            
+            return None
+        except Exception as e:
+            logger.error("查询商品详情失败 (product_id=%s): %s", product_id, e)
+            return None
+
+    def _generate_confirmation_request(self, tool_name: str, tool_info: dict, args: dict) -> str:
+        """生成人工确认提示"""
+        templates = {
+            "commerce_create_order": """⚠️ **需要您的确认**
+
+我即将为您创建订单:
+- 用户ID: {user_id}
+- 商品信息:
+{item_details}
+- 收货地址: {shipping_address}
+- 联系电话: {contact_phone}
+{warning_message}
+**请回复**:
+- "确认" 或 "是" → 创建订单
+- "取消" 或 "否" → 取消操作""",
+            
+            "commerce_process_payment": """💳 **支付确认**
+
+订单号: {order_id}
+支付金额: ¥{amount}
+支付方式: {payment_method}
+
+⚠️ 此操作将扣款，请确认:
+- "确认支付" → 执行支付
+- "取消" → 不支付""",
+            
+            "commerce_cancel_order": """🚫 **取消订单确认**
+
+订单号: {order_id}
+
+确认取消此订单吗?
+- "确认取消" → 取消订单
+- "保留" → 保留订单""",
+            
+            "commerce_update_order_status": """📝 **更新订单状态确认**
+
+订单号: {order_id}
+新状态: {new_status}
+
+确认更新订单状态吗?
+- "确认" → 更新状态
+- "取消" → 取消操作"""
+        }
+        
+        template = templates.get(tool_name, "确认执行操作: {tool_name}?")
+        
+        # 根据工具类型填充参数
+        try:
+            if tool_name == "commerce_create_order":
+                items = args.get("items", [])
+                
+                # 查询商品详情并生成详细信息
+                item_details_list = []
+                total_amount = 0.0
+                
+                for item in items:
+                    product_id = item.get('product_id')
+                    quantity = item.get('quantity', 0)
+                    
+                    # 查询商品详情
+                    product_info = self._query_product_details(product_id) if product_id else None
+                    
+                    if product_info:
+                        product_name = product_info['product_name']
+                        brand = product_info['brand']
+                        price = product_info['price']
+                        subtotal = price * quantity
+                        total_amount += subtotal
+                        
+                        item_details_list.append(
+                            f"  * {product_name} ({brand}) - 单价¥{price:.2f} × {quantity}件 = ¥{subtotal:.2f}\n"
+                            f"    [商品ID={product_id}]"
+                        )
+                    else:
+                        # 查询失败,使用基本信息
+                        item_details_list.append(
+                            f"  * 商品ID={product_id or 'N/A'}, 数量={quantity}件 (⚠️ 无法获取详细信息)"
+                        )
+                
+                item_details = "\n".join(item_details_list)
+                
+                # 生成总价提示
+                if total_amount > 0:
+                    item_details += f"\n\n💰 **预估总价**: ¥{total_amount:.2f} (不含优惠)"
+                
+                # 生成警告信息（检测对话历史中的品牌需求）
+                warning_message = ""
+                if self.memory and hasattr(self.memory, 'get_recent_turns'):
+                    try:
+                        recent_turns = self.memory.get_recent_turns(max_turns=5)
+                        user_messages = []
+                        for turn in recent_turns:
+                            if hasattr(turn, 'user_input'):
+                                user_messages.append(turn.user_input.lower())
+                        
+                        # 检测用户是否提到特定品牌
+                        requested_brands = []
+                        brand_keywords = {
+                            "小米": "Xiaomi",
+                            "xiaomi": "Xiaomi",
+                            "苹果": "Apple",
+                            "apple": "Apple",
+                            "华为": "Huawei",
+                            "huawei": "Huawei"
+                        }
+                        
+                        for msg in user_messages:
+                            for keyword, brand in brand_keywords.items():
+                                if keyword in msg and brand not in requested_brands:
+                                    requested_brands.append(brand)
+                        
+                        # 检查订单中的品牌是否匹配
+                        if requested_brands and items:
+                            order_brands = []
+                            for item in items:
+                                product_id = item.get('product_id')
+                                product_info = self._query_product_details(product_id) if product_id else None
+                                if product_info:
+                                    order_brands.append(product_info['brand'])
+                            
+                            # 如果用户要求的品牌不在订单中
+                            mismatched = [b for b in requested_brands if b not in order_brands]
+                            if mismatched and order_brands:
+                                warning_message = f"\n\n🚨 **注意**: 您之前提到了 [{', '.join(mismatched)}] 品牌，但订单中的商品是 [{', '.join(set(order_brands))}] 品牌！\n如果这不是您想要的，请回复'取消'。\n"
+                    except Exception as e:
+                        logger.debug("生成警告信息时出错: %s", e)
+                
+                return template.format(
+                    user_id=args.get("user_id", "未提供"),
+                    item_details=item_details or "  * 无商品信息",
+                    shipping_address=args.get("shipping_address", "未提供"),
+                    contact_phone=args.get("contact_phone", "未提供"),
+                    warning_message=warning_message
+                )
+            
+            elif tool_name == "commerce_process_payment":
+                return template.format(
+                    order_id=args.get("order_id", "未知"),
+                    amount=args.get("amount", "0.00"),
+                    payment_method=args.get("payment_method", "未指定")
+                )
+            
+            elif tool_name == "commerce_cancel_order":
+                return template.format(
+                    order_id=args.get("order_id", "未知")
+                )
+            
+            elif tool_name == "commerce_update_order_status":
+                return template.format(
+                    order_id=args.get("order_id", "未知"),
+                    new_status=args.get("status", "未知")
+                )
+            
+            return template.format(tool_name=tool_name)
+        except Exception as e:
+            logger.error("生成确认请求失败: %s", e)
+            return f"⚠️ 需要您确认操作: {tool_info['name']}\n\n请回复 '确认' 或 '取消'"
+    
+    def _llm_classify_confirmation(self, user_input: str, operation_name: str) -> str:
+        """使用LLM分类用户的确认意图
+        
+        Args:
+            user_input: 用户输入
+            operation_name: 操作名称（如"创建订单"）
+            
+        Returns:
+            str: "confirmed" | "cancelled" | "questioning" | "unclear"
+        """
+        try:
+            prompt = f"""请分析用户对于"{operation_name}"操作的响应意图。
+
+用户输入: "{user_input}"
+
+请判断用户的真实意图是以下哪一种，只返回对应的英文单词：
+1. confirmed - 用户明确同意/确认执行该操作
+   示例: "确认"、"好的"、"可以"、"同意"、"是的"、"没问题"、"ok"
+   
+2. cancelled - 用户明确拒绝/取消该操作
+   示例: "取消"、"不要"、"不买了"、"算了"、"不行"、"no"
+   
+3. questioning - 用户对操作有疑问/质疑
+   示例: "为什么是这个"、"怎么搞错了"、"不对吧"、"是不是弄错了"
+   
+4. unclear - 无法明确判断用户意图
+   示例: "嗯"、"这个..."、其他模糊表述
+
+注意：
+- "是不是搞错了" 应该判断为 questioning，不是 confirmed
+- "为何变成XX了" 应该判断为 questioning，不是 confirmed  
+- 只有明确的肯定词才能判断为 confirmed
+- 任何疑问句都应该判断为 questioning
+
+只返回一个单词: confirmed/cancelled/questioning/unclear"""
+
+            # 创建临时LLM实例用于分类(使用低max_tokens)
+            from .llm_deepseek import build_chat_model
+            classifier_llm = build_chat_model(
+                temperature=0.1,
+                max_tokens=10
+            )
+            
+            response = classifier_llm.generate(
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            result = response.get("content", "").strip().lower()
+            
+            # 验证返回值
+            valid_results = ["confirmed", "cancelled", "questioning", "unclear"]
+            if result in valid_results:
+                logger.info("LLM分类确认意图: '%s' → %s", user_input[:50], result)
+                return result
+            else:
+                logger.warning("LLM返回无效结果: %s, 回退到unclear", result)
+                return "unclear"
+                
+        except Exception as e:
+            logger.error("LLM分类确认意图失败: %s, 回退到关键词匹配", e)
+            # 回退到简单关键词匹配
+            user_lower = user_input.lower()
+            if any(kw in user_lower for kw in ["确认", "好", "可以", "同意", "是的", "ok", "yes"]):
+                return "confirmed"
+            elif any(kw in user_lower for kw in ["取消", "不要", "不买", "算了", "no"]):
+                return "cancelled"
+            elif any(kw in user_lower for kw in ["为什么", "为何", "怎么", "不对", "错了", "搞错"]):
+                return "questioning"
+            else:
+                return "unclear"
+    
+    def _handle_confirmation_response(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """处理用户确认响应（使用LLM智能判断）
+        
+        Returns:
+            Dict: {"action": "confirmed"|"cancelled"|"pending", "result": str, "executed": bool}
+            None: 不在确认模式或无法识别
+        """
+        if not self.confirmation_mode or not self.pending_confirmations:
+            return None
+        
+        # 获取待确认操作
+        pending = self.pending_confirmations[-1]
+        tool_name = pending["tool_name"]
+        tool_info = self.CRITICAL_TOOLS.get(tool_name, {})
+        operation_name = tool_info.get("name", "操作")
+        
+        # 使用LLM分类用户意图
+        intent = self._llm_classify_confirmation(user_input, operation_name)
+        
+        if intent == "confirmed":
+            # 用户确认 → 执行操作
+            tool_name = pending["tool_name"]
+            args = pending["args"]
+            
+            logger.info("✅ 用户确认操作: %s", tool_name)
+            
+            # 实际执行工具调用(绕过确认检查)
+            tool = self.tool_map.get(tool_name)
+            if tool:
+                try:
+                    parsed = tool.parse_arguments(args)
+                    result = tool.invoke(parsed)
+                    
+                    # 清理确认状态
+                    self.pending_confirmations.pop()
+                    if not self.pending_confirmations:
+                        self.confirmation_mode = False
+                    
+                    logger.info("操作已执行: %s", tool_name)
+                    return {
+                        "action": "confirmed",
+                        "result": result,
+                        "executed": True,
+                        "tool_name": tool_name,
+                        "args": deepcopy(args)
+                    }
+                except Exception as e:
+                    logger.error("执行确认操作失败: %s", e)
+                    self.pending_confirmations.pop()
+                    if not self.pending_confirmations:
+                        self.confirmation_mode = False
+                    return {
+                        "action": "error",
+                        "result": f"执行失败: {str(e)}",
+                        "executed": False
+                    }
+            else:
+                logger.error("工具未找到: %s", tool_name)
+                self.pending_confirmations.pop()
+                if not self.pending_confirmations:
+                    self.confirmation_mode = False
+                return {
+                    "action": "error",
+                    "result": f"工具 {tool_name} 未找到",
+                    "executed": False
+                }
+        
+        elif intent == "cancelled":
+            # 用户取消
+            logger.info("❌ 用户取消操作: %s", tool_name)
+            
+            self.pending_confirmations.pop()
+            if not self.pending_confirmations:
+                self.confirmation_mode = False
+            
+            return {
+                "action": "cancelled",
+                "result": f"操作已取消: {operation_name}。还有什么我可以帮您的吗?",
+                "executed": False,
+                "tool_name": tool_name
+            }
+        
+        elif intent == "questioning":
+            # 用户有疑问 - 当作取消处理
+            logger.info("❓ 用户质疑操作(自动取消): %s, 输入: %s", tool_name, user_input[:50])
+            
+            self.pending_confirmations.pop()
+            if not self.pending_confirmations:
+                self.confirmation_mode = False
+            
+            return {
+                "action": "cancelled",
+                "result": f"检测到您对订单有疑问，操作已自动取消。如需重新下单，请明确告知您需要的商品信息。",
+                "executed": False,
+                "tool_name": tool_name
+            }
+        
+        else:  # unclear
+            # 无法识别意图
+            logger.warning("⏳ 无法明确判断确认意图: %s", user_input[:50])
+            return {
+                "action": "pending",
+                "result": "抱歉，我没有理解您的意思。请明确回复：\n• '确认' - 同意执行该操作\n• '取消' - 取消该操作",
+                "executed": False
+            }
+
+    def _summarize_tool_observation(self, tool_entry: Dict[str, Any]) -> Optional[str]:
+        """基于最近一次工具输出构造兜底总结。"""
+        observation = tool_entry.get("observation")
+        if not observation:
+            return None
+
+        parsed: Any = None
+        if isinstance(observation, str):
+            try:
+                parsed = json.loads(observation)
+            except json.JSONDecodeError:
+                parsed = None
+        elif isinstance(observation, (dict, list)):
+            parsed = observation
+
+        if isinstance(parsed, dict):
+            payload = parsed.get("result", parsed)
+        else:
+            payload = parsed
+
+        if isinstance(payload, dict):
+            items = payload.get("items") or payload.get("products") or payload.get("results")
+            if isinstance(items, list) and items:
+                lines = ["以下是我刚获取的商品信息摘要："]
+                for item in items[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("name") or item.get("title") or "商品"
+                    price = item.get("price") or item.get("unit_price")
+                    stock = item.get("stock")
+                    if stock is None:
+                        stock = item.get("inventory")
+                    details = [f"名称：{name}"]
+                    if price is not None:
+                        details.append(f"价格：¥{price}")
+                    if stock is not None:
+                        details.append(f"库存：{stock}")
+                    lines.append("- " + "，".join(details))
+                total = payload.get("count") or payload.get("total")
+                if total:
+                    lines.append(f"共返回 {total} 条结果，可继续筛选以获取更精确列表。")
+                return "\n".join(lines)
+
+        if isinstance(payload, list) and payload:
+            preview = payload[:3]
+            return f"工具返回了 {len(payload)} 条记录示例：{preview}"
+
+        if isinstance(observation, str):
+            trimmed = observation.strip()
+            return trimmed[:600] + ("..." if len(trimmed) > 600 else "")
+
+        return None
+
+    def _emit_stream_event(
+        self,
+        handler: Optional[Callable[[Dict[str, Any]], None]],
+        step_type: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Safely emit a streaming event to the registered handler."""
+        if not handler:
+            return
+        try:
+            handler({
+                "step_type": step_type,
+                "content": content,
+                "metadata": metadata or {},
+            })
+        except Exception as exc:  # pragma: no cover - tracing handler failures
+            logger.debug("Stream handler raised %s", exc)
+
+    def _chunk_text_for_stream(self, text: str, chunk_size: int = 80) -> List[str]:
+        """Split plain text into small chunks for simulated streaming."""
+        if not text:
+            return []
+        return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+    def _stream_final_answer(self, result: Dict[str, Any]):
+        """Yield events for the final assistant answer (real or simulated streaming)."""
+        final_answer = result.get("final_answer", "") or ""
+        raw_messages = result.get("raw_messages", []) or []
+        streaming_supported = hasattr(self.llm, "generate_stream")
+        used_llm_stream = False
+
+        def _emit_final(text: str, streaming: bool, extra: Optional[Dict[str, Any]] = None):
+            meta = {"full_result": result, "streaming": streaming}
+            if extra:
+                meta.update(extra)
+            yield {
+                "step_type": "final_answer",
+                "content": text,
+                "metadata": meta,
+            }
+
+        if (
+            streaming_supported
+            and raw_messages
+            and raw_messages[-1].get("role") == "tool"
+        ):
+            yield {
+                "step_type": "llm_streaming_start",
+                "content": "正在生成答案...",
+                "metadata": {},
+            }
+            try:
+                accumulated_answer = ""
+                for chunk in self.llm.generate_stream(raw_messages, tools=None):
+                    delta = chunk.get("delta_content", "")
+                    if delta:
+                        accumulated_answer = chunk.get("accumulated_content", accumulated_answer + delta)
+                        yield {
+                            "step_type": "llm_streaming",
+                            "content": delta,
+                            "metadata": {"accumulated": accumulated_answer},
+                        }
+                    if chunk.get("finish_reason"):
+                        used_llm_stream = True
+                        final_answer = accumulated_answer or final_answer
+                        result["final_answer"] = final_answer
+                        yield from _emit_final(final_answer, True)
+                        return
+            except Exception as exc:  # pragma: no cover - streaming fallback
+                logger.error("LLM 流式生成失败: %s", exc, exc_info=True)
+                yield {
+                    "step_type": "error",
+                    "content": f"流式生成失败: {exc}",
+                    "metadata": {"phase": "llm_streaming"},
+                }
+
+        if not used_llm_stream:
+            if final_answer:
+                yield {
+                    "step_type": "llm_streaming_start",
+                    "content": "正在组织答案...",
+                    "metadata": {},
+                }
+                accumulated = ""
+                for chunk in self._chunk_text_for_stream(final_answer):
+                    accumulated += chunk
+                    yield {
+                        "step_type": "llm_streaming",
+                        "content": chunk,
+                        "metadata": {"accumulated": accumulated},
+                    }
+                    delay = getattr(self, "simulated_stream_delay", 0.0)
+                    if delay > 0:
+                        time.sleep(delay)
+            yield from _emit_final(final_answer, False)
+
+    def run(
+        self,
+        user_input: str,
+        *,
+        stream_handler: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
         """执行 Agent 推理循环
         
         Args:
             user_input: 用户输入
+            stream_handler: 可选的流式事件回调
             
         Returns:
             Dict: 包含 final_answer, plan, history, tool_log, execution_log 等信息
         """
 
         logger.info("LangChain agent received input: %s", user_input)
+        self._emit_stream_event(
+            stream_handler,
+            "thinking_start",
+            "正在分析您的需求...",
+            {"user_input": user_input[:120]},
+        )
+        self._ingest_user_context_from_text(user_input)
+        
+        # Phase 6: 优先处理人工确认响应
+        if self.confirmation_mode:
+            confirmation_result = self._handle_confirmation_response(user_input)
+            if confirmation_result:
+                action = confirmation_result["action"]
+                result_msg = confirmation_result["result"]
+                
+                if action == "confirmed":
+                    # 用户确认,操作已执行
+                    tool_name = confirmation_result.get("tool_name", "未知操作")
+                    logger.info("✅ 用户确认并执行: %s", tool_name)
+                    summary_text = self._summarize_confirmation_result(tool_name, result_msg)
+                    follow_up_hint = ""
+                    if tool_name == "commerce_create_order":
+                        follow_up_hint = (
+                            "\n\n🔜 订单已生成，如需我继续安排支付，请直接回复\"确认支付\"" 
+                            "或告知想使用的支付方式，我会立即为您处理扣款。"
+                        )
+                    elif tool_name == "commerce_process_payment":
+                        follow_up_hint = (
+                            "\n\n如需我继续跟进发货、开票或订单状态，请告诉我下一步需求。"
+                        )
+                    if summary_text:
+                        display_result = summary_text + follow_up_hint
+                    elif isinstance(result_msg, str):
+                        display_result = result_msg + follow_up_hint
+                    else:
+                        display_result = json.dumps(result_msg, ensure_ascii=False, indent=2) + follow_up_hint
+
+                    final_message = f"✓ 操作已完成: {tool_name}\n\n{display_result}\n\n还有什么我可以帮您的吗?"
+
+                    tool_args = confirmation_result.get("args", {}) or {}
+                    tool_obj = self.tool_map.get(tool_name)
+                    tool_class = tool_obj.__class__.__name__ if tool_obj else "UnknownTool"
+                    tool_module = tool_obj.__class__.__module__ if tool_obj else __name__
+                    safe_result = self._make_json_safe(result_msg)
+                    observation_payload = json.dumps(
+                        {
+                            "_tool_info": {
+                                "class": tool_class,
+                                "module": tool_module,
+                                "method": "invoke",
+                            },
+                            "result": safe_result,
+                            "executed_via_confirmation": True,
+                        },
+                        ensure_ascii=False,
+                    )
+                    confirmation_tool_entry = {
+                        "tool": tool_name,
+                        "input": deepcopy(tool_args),
+                        "observation": observation_payload,
+                        "iteration": 0,
+                        "confirmed": True,
+                    }
+
+                    try:
+                        self._ingest_user_context_from_tool(tool_name, tool_args, safe_result)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug("确认结果写入用户上下文失败: %s", exc)
+
+                    if self.state_manager:
+                        try:
+                            self.state_manager.update_from_tool_results([confirmation_tool_entry])
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.debug("基于确认结果更新对话状态失败: %s", exc)
+
+                    if self.use_memory and self.memory:
+                        try:
+                            self.memory.add_turn(
+                                user_input=user_input,
+                                agent_response=final_message,
+                                tool_calls=[confirmation_tool_entry],
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.debug("确认结果写入记忆失败: %s", exc)
+
+                    # 将执行结果包装为正常返回
+                    return {
+                        "final_answer": final_message,
+                        "plan": [],
+                        "history": [],
+                        "tool_log": [confirmation_tool_entry],
+                        "execution_log": [{
+                            "step_type": "confirmation",
+                            "content": f"用户确认执行 {tool_name}",
+                            "timestamp": datetime.now().isoformat()
+                        }]
+                    }
+                
+                elif action == "cancelled":
+                    # 用户取消
+                    logger.info("❌ 用户取消操作")
+                    return {
+                        "final_answer": f"{result_msg}\n\n还有什么我可以帮您的吗?",
+                        "plan": [],
+                        "history": [],
+                        "tool_log": [],
+                        "execution_log": [{
+                            "step_type": "confirmation_cancelled",
+                            "content": result_msg,
+                            "timestamp": datetime.now().isoformat()
+                        }]
+                    }
+                
+                elif action == "pending":
+                    # 无法识别意图,继续等待
+                    logger.warning("⏳ 等待明确的确认响应")
+                    return {
+                        "final_answer": result_msg,
+                        "plan": [],
+                        "history": [],
+                        "tool_log": [],
+                        "execution_log": [{
+                            "step_type": "confirmation_pending",
+                            "content": "等待用户确认",
+                            "timestamp": datetime.now().isoformat()
+                        }]
+                    }
+                
+                elif action == "error":
+                    # 执行错误
+                    logger.error("❌ 确认操作执行失败")
+                    return {
+                        "final_answer": f"抱歉,{result_msg}\n\n请稍后重试。",
+                        "plan": [],
+                        "history": [],
+                        "tool_log": [],
+                        "execution_log": [{
+                            "step_type": "confirmation_error",
+                            "content": result_msg,
+                            "timestamp": datetime.now().isoformat()
+                        }]
+                    }
         
         # Phase 4 优化: 开始质量跟踪
         if self.quality_tracker:
@@ -407,6 +1404,16 @@ class LangChainAgent:
         if self.intent_tracker:
             current_intent = self.intent_tracker.track_intent(user_input, turn_id)
             logger.info(f"识别意图: {current_intent.category.value} (置信度: {current_intent.confidence:.2f})")
+            if current_intent:
+                self._emit_stream_event(
+                    stream_handler,
+                    "intent_recognized",
+                    f"识别意图: {current_intent.category.value}",
+                    {
+                        "intent": current_intent.category.value,
+                        "confidence": getattr(current_intent, "confidence", 0.0),
+                    },
+                )
         
         # Phase 5: 查询改写 (针对推荐意图)
         enhanced_input = user_input
@@ -418,6 +1425,15 @@ class LangChainAgent:
                 rewritten_query = self.query_rewriter.rewrite(user_input, current_intent)
                 enhanced_input = self.query_rewriter.format_enhanced_prompt(user_input, rewritten_query)
                 logger.info(f"查询已改写: 类别={rewritten_query.category}, 关键词={rewritten_query.keywords[:3]}")
+                self._emit_stream_event(
+                    stream_handler,
+                    "query_rewritten",
+                    f"查询改写完成: 类别={rewritten_query.category}",
+                    {
+                        "keywords": rewritten_query.keywords[:3],
+                        "strategy": rewritten_query.search_strategy,
+                    },
+                )
             except Exception as e:
                 logger.error(f"查询改写失败: {e}, 使用原始查询")
                 enhanced_input = user_input
@@ -480,6 +1496,7 @@ class LangChainAgent:
             
             if context_prefix:
                 logger.info("注入对话历史上下文: %d 字符", len(context_prefix))
+                logger.info("对话历史内容: %s", context_prefix[:500])  # 记录前500字符到日志
                 add_log("memory_context", context_prefix, {
                     "length": len(context_prefix)
                 })
@@ -488,6 +1505,7 @@ class LangChainAgent:
             context_prefix = self.memory.get_context_for_prompt()
             if context_prefix:
                 logger.info("注入对话历史上下文: %d 字符", len(context_prefix))
+                logger.info("对话历史内容: %s", context_prefix[:500])  # 记录前500字符到日志
                 add_log("memory_context", context_prefix, {
                     "length": len(context_prefix)
                 })
@@ -532,11 +1550,15 @@ class LangChainAgent:
         tool_log: List[Dict[str, Any]] = []
         plan_lines: List[str] = []
         history: List[str] = []
+        tool_call_history: List[str] = []  # 记录工具调用历史，用于检测重复
+        tool_phase_announced = False
 
         final_answer = ""
         last_ai: Optional[Dict[str, Any]] = None
+        forced_summary: Optional[str] = None
 
         for iteration in range(1, self.max_iterations + 1):
+            forced_summary = None
             add_log("iteration_start", f"开始第 {iteration} 轮推理", {"iteration": iteration})
 
             requires_validation, payload_hint = self._should_require_validation(user_input, tool_log)
@@ -572,6 +1594,15 @@ class LangChainAgent:
             except Exception as e:
                 error_msg = f"LLM 调用失败: {type(e).__name__}: {str(e)}"
                 logger.error(error_msg, exc_info=True)
+                self._emit_stream_event(
+                    stream_handler,
+                    "error",
+                    error_msg,
+                    {
+                        "phase": "llm_generate",
+                        "iteration": iteration,
+                    },
+                )
                 add_log("llm_error", error_msg, {
                     "iteration": iteration,
                     "error_type": type(e).__name__,
@@ -660,6 +1691,172 @@ class LangChainAgent:
                         parsed_args = {"_raw": raw_args}
                 else:
                     parsed_args = raw_args
+
+                if tool_name in self.CRITICAL_TOOLS:
+                    tool_meta = self.CRITICAL_TOOLS[tool_name]
+                    intent_is_unknown = (
+                        current_intent is None
+                        or getattr(current_intent, "category", None) == IntentCategory.UNKNOWN
+                    )
+
+                    if tool_name == "commerce_create_order":
+                        sanitized_args, payload_error = self._prepare_order_arguments(parsed_args)
+                        if payload_error:
+                            error_messages = {
+                                "missing_user_id": "下单前需要绑定您的会员身份，请先告知注册手机号或用户ID。",
+                                "invalid_user_id": "当前用户编号无效，请确认后重新提供。",
+                                "missing_items": "订单缺少商品明细，请告诉我需要购买的商品和数量。",
+                                "missing_product": "尚未识别到具体商品，请先说明想购买的型号或货号。",
+                            }
+                            guard_message = error_messages.get(payload_error, "创建订单所需信息不完整，请补充后再试。")
+                            add_log(
+                                "order_payload_guard",
+                                guard_message,
+                                {"iteration": iteration, "reason": payload_error}
+                            )
+                            self._emit_stream_event(
+                                stream_handler,
+                                "confirmation_required",
+                                guard_message,
+                                {"tool": tool_name, "reason": payload_error},
+                            )
+                            plan_snapshot = plan_lines + ["等待补充下单所需信息"]
+                            return {
+                                "final_answer": guard_message,
+                                "plan": "\n".join(plan_snapshot),
+                                "history": history,
+                                "tool_log": tool_log,
+                                "execution_log": execution_log,
+                            }
+
+                        parsed_args = sanitized_args
+                        raw_args = json.dumps(parsed_args, ensure_ascii=False)
+
+                    confirmation_prompt = self._generate_confirmation_request(tool_name, tool_meta, parsed_args)
+                    if intent_is_unknown:
+                        confirmation_prompt = (
+                            "⚠️ 当前这句话未识别为下单/支付指令，请先明确确认。\n\n"
+                            + confirmation_prompt
+                        )
+
+                    self.pending_confirmations.append({
+                        "tool_name": tool_name,
+                        "args": deepcopy(parsed_args),
+                        "requested_at": datetime.now().isoformat(),
+                    })
+                    self.confirmation_mode = True
+                    plan_lines.append(f"等待用户确认: {tool_name}")
+
+                    add_log(
+                        "confirmation_prompt",
+                        {
+                            "tool": tool_name,
+                            "intent_unknown": intent_is_unknown,
+                            "message": confirmation_prompt[:200],
+                        },
+                        {"iteration": iteration},
+                    )
+                    self._emit_stream_event(
+                        stream_handler,
+                        "confirmation_required",
+                        "需要您的确认后才能继续",
+                        {
+                            "tool": tool_name,
+                            "intent_unknown": intent_is_unknown,
+                        },
+                    )
+                    return {
+                        "final_answer": confirmation_prompt,
+                        "plan": "\n".join(plan_lines),
+                        "history": history,
+                        "tool_log": tool_log,
+                        "execution_log": execution_log,
+                        "requires_confirmation": True,
+                        "pending_operation": {
+                            "tool_name": tool_name,
+                            "args": parsed_args,
+                        },
+                    }
+
+                if not tool_phase_announced:
+                    self._emit_stream_event(
+                        stream_handler,
+                        "tool_calling_start",
+                        "正在调用工具获取信息...",
+                        {"iteration": iteration},
+                    )
+                    tool_phase_announced = True
+
+                self._emit_stream_event(
+                    stream_handler,
+                    "tool_calling",
+                    f"调用 {tool_name}",
+                    {
+                        "tool": tool_name,
+                        "arguments": parsed_args,
+                        "iteration": iteration,
+                    },
+                )
+                
+                # 检测重复工具调用
+                tool_signature = f"{tool_name}({json.dumps(parsed_args, sort_keys=True, ensure_ascii=False)})"
+                tool_call_history.append(tool_signature)
+                
+                # 根据工具类型设置不同的重复阈值
+                # 查询类工具更严格(2次)，其他工具标准(3次)
+                query_tools = [
+                    "commerce_get_user_orders", "commerce_get_order_detail",
+                    "commerce_get_user_info", "commerce_get_cart",
+                    "commerce_search_products", "commerce_get_product_detail"
+                ]
+                repeat_threshold = 2 if tool_name in query_tools else 3
+                
+                # 如果同一工具被连续调用达到阈值，强制终止并返回结果
+                if len(tool_call_history) >= repeat_threshold:
+                    recent_calls = tool_call_history[-repeat_threshold:]
+                    if len(set(recent_calls)) == 1:  # 最近N次调用完全相同
+                        logger.warning(
+                            "检测到工具 %s 被连续调用%d次(阈值=%d)，强制终止迭代",
+                            tool_name, repeat_threshold, repeat_threshold
+                        )
+                        add_log(
+                            "repeated_tool_call_guard",
+                            f"工具 {tool_name} 重复调用，强制终止",
+                            {"iteration": iteration, "tool_name": tool_name, "call_count": repeat_threshold, "threshold": repeat_threshold}
+                        )
+                        
+                        # 使用最后一次工具调用的结果作为最终答案
+                        if tool_log:
+                            last_result = tool_log[-1].get("observation", "")
+                            final_answer = f"根据查询结果：{last_result[:500]}..."
+                        else:
+                            final_answer = "已完成查询，请查看上方工具调用结果。"
+
+                        self._emit_stream_event(
+                            stream_handler,
+                            "error",
+                            f"工具 {tool_name} 重复调用，已停止后续推理",
+                            {
+                                "tool": tool_name,
+                                "iteration": iteration,
+                                "repeat_threshold": repeat_threshold,
+                            },
+                        )
+                        add_log("final_answer", final_answer, {"iteration": iteration, "reason": "repeated_calls"})
+                        break  # 跳出 for call in tool_calls 循环
+                
+                # 检测单个工具在整个对话中被调用超过5次
+                tool_name_count = sum(1 for sig in tool_call_history if sig.startswith(f"{tool_name}("))
+                if tool_name_count > 5:
+                    logger.warning(
+                        "工具 %s 在本轮对话中已被调用%d次，可能存在循环",
+                        tool_name, tool_name_count
+                    )
+                    add_log(
+                        "excessive_tool_calls",
+                        f"工具 {tool_name} 调用次数过多",
+                        {"iteration": iteration, "tool_name": tool_name, "total_calls": tool_name_count}
+                    )
                 
                 # 获取工具类信息
                 tool_obj = self.tool_map.get(tool_name)
@@ -671,6 +1868,7 @@ class LangChainAgent:
                     }
                 
                 # 记录工具调用 - 完整参数和类信息
+                logger.info("工具调用[%d]: %s, 参数: %s", iteration, tool_name, json.dumps(parsed_args, ensure_ascii=False)[:200])
                 add_log("tool_call", {
                     "name": tool_name,
                     "arguments": parsed_args,
@@ -684,6 +1882,37 @@ class LangChainAgent:
                 })
                 
                 observation = self._call_tool(tool_name, raw_args)
+                logger.info("工具返回[%d]: %s, 结果: %s", iteration, tool_name, str(observation)[:300])
+                
+                # Phase 6: 检查是否返回确认请求
+                try:
+                    check_confirmation = json.loads(observation)
+                    if isinstance(check_confirmation, dict) and check_confirmation.get("requires_confirmation"):
+                        # 拦截到关键操作,需要用户确认
+                        confirmation_message = check_confirmation.get("message", "需要您的确认")
+                        logger.warning("⚠️ 关键操作需要确认,终止推理循环")
+                        
+                        add_log("confirmation_required", {
+                            "tool_name": tool_name,
+                            "message": confirmation_message,
+                            "risk_level": check_confirmation.get("risk_level", "unknown")
+                        }, {"iteration": iteration})
+                        
+                        # 立即返回确认提示给用户
+                        return {
+                            "final_answer": confirmation_message,
+                            "plan": plan_lines,
+                            "history": messages,
+                            "tool_log": tool_log,
+                            "execution_log": execution_log,
+                            "requires_confirmation": True,
+                            "pending_operation": {
+                                "tool_name": tool_name,
+                                "args": parsed_args
+                            }
+                        }
+                except (json.JSONDecodeError, TypeError):
+                    pass  # 不是JSON或不需要确认,继续正常流程
                 
                 # Phase 4 优化: 记录工具调用（用于质量跟踪）
                 if self.quality_tracker:
@@ -692,9 +1921,9 @@ class LangChainAgent:
                 # 尝试解析工具返回的元信息
                 tool_result_info = {}
                 sanitized_observation = None
+                payload: Any = None
                 try:
                     result_data = json.loads(observation)
-                    payload: Any
                     if isinstance(result_data, dict):
                         payload = result_data.get("result", result_data)
                     else:
@@ -729,18 +1958,16 @@ class LangChainAgent:
                     if isinstance(result_data, dict) and "_tool_info" in result_data:
                         tool_result_info = result_data["_tool_info"]
 
-                    if isinstance(payload, (dict, list)):
-                        observation_clean = json.dumps(payload, ensure_ascii=False)
-                    else:
-                        observation_clean = str(payload)
+                    observation_clean = self._stringify_observation(payload)
 
                     if isinstance(result_data, (dict, list)):
                         sanitized_observation = json.dumps(result_data, ensure_ascii=False)
                 except (json.JSONDecodeError, TypeError, ValueError):
-                    observation_clean = observation
+                    observation_clean = self._stringify_observation(observation)
 
                 if sanitized_observation is not None:
                     observation = sanitized_observation
+                observation_clean = self._stringify_observation(observation_clean)
                 
                 # 记录工具结果 - 完整输出和执行信息
                 add_log("tool_result", observation_clean, {
@@ -759,6 +1986,23 @@ class LangChainAgent:
                         "observation": observation,
                         "iteration": iteration,
                     }
+                )
+                context_payload = payload if payload is not None else observation
+                self._ingest_user_context_from_tool(tool_name, parsed_args, context_payload)
+                summarized = self._summarize_tool_observation(tool_log[-1])
+                preview_text = observation_clean
+                if summarized:
+                    preview_text = f"{summarized}\n\n---\n{observation_clean}"
+                self._emit_stream_event(
+                    stream_handler,
+                    "tool_result",
+                    preview_text or f"{tool_name} 返回结果",
+                    {
+                        "tool": tool_name,
+                        "iteration": iteration,
+                        "observation": observation_clean,
+                        "observation_summary": summarized,
+                    },
                 )
                 plan_lines.append(
                     f"Step {len(tool_log)} → {tool_name}({json.dumps(parsed_args, ensure_ascii=False)})"
@@ -781,11 +2025,46 @@ class LangChainAgent:
                         "content": observation,
                     }
                 )
+
+                if tool_name == "commerce_process_payment":
+                    summary_message = self._build_checkout_summary(tool_log)
+                    if summary_message:
+                        forced_summary = summary_message
+                        plan_lines.append("完成支付并已向您汇报结果。")
+                        break
+            
+            # 如果因重复调用而break，需要跳出主循环
+            # 检查最近2次或3次调用（根据工具类型）
+            if len(tool_call_history) >= 2:
+                # 检查最近2次（查询类工具）
+                if len(tool_call_history[-2:]) == 2 and len(set(tool_call_history[-2:])) == 1:
+                    break  # 跳出 for iteration 主循环
+            if len(tool_call_history) >= 3:
+                # 检查最近3次（其他工具）
+                if len(set(tool_call_history[-3:])) == 1:
+                    break  # 跳出 for iteration 主循环
+
+            if forced_summary:
+                final_answer = forced_summary
+                add_log("auto_checkout_summary", final_answer, {"iteration": iteration})
+                break
         else:  # pragma: no cover - safeguards when exceeding iterations
             logger.warning("LangChain agent reached max iterations without final answer")
             add_log("max_iterations", "达到最大迭代次数", {"max_iterations": self.max_iterations})
-            if last_ai is not None:
+            fallback_summary = None
+            if tool_log:
+                fallback_summary = self._summarize_tool_observation(tool_log[-1])
+
+            if fallback_summary:
+                final_answer = (
+                    "我已拿到最新的工具数据，但系统在生成完整回答前触发了迭代上限。\n"
+                    f"{fallback_summary}\n"
+                    "如需更多筛选或继续查询，请告诉我具体条件。"
+                )
+            elif last_ai is not None and last_ai.get("content"):
                 final_answer = last_ai.get("content", "")
+            else:
+                final_answer = "我已获取相关工具结果，但生成回复时命中了迭代上限，请尝试调整条件或稍后再试。"
             plan_lines.append("达到最大迭代次数，可能需要人工介入。")
 
         plan = "\n".join(plan_lines)
@@ -1199,159 +2478,59 @@ class LangChainAgent:
         return state.stage.value if state else None
     
     def run_stream(self, user_input: str):
-        """真流式执行 Agent 推理循环，逐 token 输出最终答案
-        
-        Args:
-            user_input: 用户输入
-            
-        Yields:
-            Dict[str, Any]: 包含步骤类型和内容的字典
-            - step_type: 'thinking_start', 'intent_recognized', 'query_rewritten', 
-                        'tool_calling', 'tool_result', 'llm_streaming', 'final_answer' 等
-            - content: 相应的内容
-            - metadata: 额外的元数据
-        """
-        # 步骤1: 开始思考
-        yield {
-            "step_type": "thinking_start",
-            "content": "正在分析您的需求...",
-            "metadata": {"user_input": user_input[:100]}
-        }
-        
-        logger.info("LangChain agent received input (stream mode): %s", user_input)
-        
-        # 步骤2: 意图识别
-        current_intent = None
-        if self.intent_tracker:
-            turn_id = len(self.quality_tracker.session_metrics.turns) + 1 if self.quality_tracker else 0
-            current_intent = self.intent_tracker.track_intent(user_input, turn_id)
-            yield {
-                "step_type": "intent_recognized",
-                "content": f"识别意图: {current_intent.category.value}",
-                "metadata": {
-                    "intent": current_intent.category.value,
-                    "confidence": current_intent.confidence
-                }
-            }
-            logger.info(f"识别意图: {current_intent.category.value} (置信度: {current_intent.confidence:.2f})")
-        
-        # 步骤3: 查询改写
-        rewritten_query = None
-        from .intent_tracker import IntentCategory
-        if (self.query_rewriter and current_intent and 
-            current_intent.category in [IntentCategory.RECOMMENDATION, IntentCategory.SEARCH]):
+        """执行带实时事件推送的推理循环。"""
+
+        sentinel_done = "__final_result__"
+        sentinel_error = "__fatal_error__"
+        event_queue: SimpleQueue = SimpleQueue()
+
+        def handler(event: Dict[str, Any]):
+            event_queue.put(event)
+
+        def worker():
             try:
-                rewritten_query = self.query_rewriter.rewrite(user_input, current_intent)
+                result = self.run(user_input, stream_handler=handler)
+                event_queue.put({"step_type": sentinel_done, "result": result})
+            except Exception as exc:  # pragma: no cover - catastrophic failure fallback
+                message = f"执行出错: {type(exc).__name__}: {exc}"
+                logger.error("Agent run_stream worker failed: %s", message, exc_info=True)
+                event_queue.put({
+                    "step_type": sentinel_error,
+                    "content": message,
+                    "metadata": {"exception": type(exc).__name__},
+                })
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        while True:
+            event = event_queue.get()
+            step_type = event.get("step_type")
+
+            if step_type == sentinel_done:
+                result = event.get("result", {}) or {}
+                for chunk in self._stream_final_answer(result):
+                    yield chunk
+                break
+
+            if step_type == sentinel_error:
+                error_content = event.get("content", "执行出错")
                 yield {
-                    "step_type": "query_rewritten",
-                    "content": f"查询改写完成: 类别={rewritten_query.category}",
-                    "metadata": {
-                        "keywords": rewritten_query.keywords[:3],
-                        "strategy": rewritten_query.search_strategy
-                    }
+                    "step_type": "error",
+                    "content": error_content,
+                    "metadata": event.get("metadata", {}),
                 }
-                logger.info(f"查询已改写: 类别={rewritten_query.category}, 关键词={rewritten_query.keywords[:3]}")
-            except Exception as e:
-                logger.error(f"查询改写失败: {e}")
-        
-        # 步骤4: 执行完整推理（使用原run方法获取工具调用）
-        # 但将最后一轮LLM调用改为流式
-        yield {
-            "step_type": "tool_calling_start",
-            "content": "正在调用工具获取信息...",
-            "metadata": {}
-        }
-        
-        # 先执行完整推理获取工具调用和上下文
-        result = self.run(user_input)
-        
-        # 步骤5: 报告工具调用结果
-        tool_log = result.get("tool_log", [])
-        if tool_log:
-            tool_names = [t.get("tool", "unknown") for t in tool_log[:5]]
-            yield {
-                "step_type": "tool_results",
-                "content": f"已调用 {len(tool_log)} 个工具",
-                "metadata": {
-                    "tool_count": len(tool_log),
-                    "tool_names": tool_names
-                }
-            }
-        
-        # 步骤6: 流式生成最终答案
-        yield {
-            "step_type": "llm_streaming_start",
-            "content": "正在生成答案...",
-            "metadata": {}
-        }
-        
-        # 检查 LLM 是否支持流式生成
-        if hasattr(self.llm, 'generate_stream'):
-            # 使用工具调用后的消息历史，让LLM生成最终总结
-            messages = result.get("raw_messages", [])
-            
-            # 如果消息历史为空或最后不是工具结果，使用已有的final_answer
-            if not messages or messages[-1].get("role") != "tool":
                 yield {
                     "step_type": "final_answer",
-                    "content": result.get("final_answer", ""),
+                    "content": error_content,
                     "metadata": {
-                        "full_result": result,
-                        "streaming": False
-                    }
+                        "full_result": {},
+                        "streaming": False,
+                        "error": error_content,
+                    },
                 }
-            else:
-                # 流式生成最终答案
-                try:
-                    accumulated_answer = ""
-                    for chunk in self.llm.generate_stream(messages, tools=None):
-                        delta = chunk.get("delta_content", "")
-                        accumulated_answer = chunk.get("accumulated_content", "")
-                        
-                        if delta:  # 有新内容时才yield
-                            yield {
-                                "step_type": "llm_streaming",
-                                "content": delta,
-                                "metadata": {
-                                    "accumulated": accumulated_answer
-                                }
-                            }
-                        
-                        # 检查是否完成
-                        if chunk.get("finish_reason"):
-                            # 更新result中的final_answer
-                            result["final_answer"] = accumulated_answer
-                            yield {
-                                "step_type": "final_answer",
-                                "content": accumulated_answer,
-                                "metadata": {
-                                    "full_result": result,
-                                    "streaming": True
-                                }
-                            }
-                            break
-                except Exception as e:
-                    logger.error(f"LLM 流式生成失败: {e}，回退到非流式", exc_info=True)
-                    # 失败时使用已有的final_answer
-                    yield {
-                        "step_type": "final_answer",
-                        "content": result.get("final_answer", ""),
-                        "metadata": {
-                            "full_result": result,
-                            "streaming": False,
-                            "error": str(e)
-                        }
-                    }
-        else:
-            # LLM 不支持流式，直接返回结果
-            yield {
-                "step_type": "final_answer",
-                "content": result.get("final_answer", ""),
-                "metadata": {
-                    "full_result": result,
-                    "streaming": False
-                }
-            }
+                break
+
+            yield event
 
 
 # 保持旧名称兼容

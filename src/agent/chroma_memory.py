@@ -249,9 +249,32 @@ class ChromaConversationMemory:
         user_summary = turn.user_input[:100]
         
         tool_summary = ""
+        key_info = []  # 保存关键信息（如商品ID、订单号等）
+        
         if turn.tool_calls:
             tool_names = [tc.get("tool", "unknown") for tc in turn.tool_calls]
             tool_summary = f", 调用工具: {', '.join(tool_names)}"
+            
+            # 提取关键信息：商品ID、订单号等
+            for tc in turn.tool_calls:
+                tool_name = tc.get("tool", "")
+                args = tc.get("arguments", {})
+                
+                # 商品相关信息
+                if "product_id" in args:
+                    key_info.append(f"商品ID={args['product_id']}")
+                
+                # 订单相关信息
+                if "order_id" in args:
+                    key_info.append(f"订单ID={args['order_id']}")
+                
+                # 搜索关键词
+                if tool_name == "commerce_search_products" and "keyword" in args:
+                    key_info.append(f"搜索'{args['keyword']}'")
+        
+        # 添加关键信息到摘要
+        if key_info:
+            tool_summary += f" [{', '.join(key_info[:3])}]"  # 最多显示3个关键信息
         
         response_summary = turn.agent_response[:50]
         if len(turn.agent_response) > 50:

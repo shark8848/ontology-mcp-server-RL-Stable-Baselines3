@@ -330,7 +330,9 @@ class ProductService:
             
             # 如果有关键词，优先使用 FTS5 全文检索
             if keyword and use_fts:
-                product_ids = self.fts_search(keyword, limit=limit * 2)  # 预留更多结果用于后续筛选
+                # 如果有category/brand筛选，增加FTS5的limit以确保足够的结果
+                fts_limit = limit * 10 if (category or brand) else limit * 2
+                product_ids = self.fts_search(keyword, limit=fts_limit)  # 预留更多结果用于后续筛选
                 
                 if product_ids:
                     # 使用 FTS5 结果的 ID 列表进行查询
@@ -770,13 +772,15 @@ class ShipmentService:
     
     def get_shipment_by_order(self, order_id: int) -> Optional[Shipment]:
         """根据订单ID获取物流信息"""
+        from sqlalchemy.orm import joinedload
         with self.db.get_session() as session:
-            return session.query(Shipment).filter(Shipment.order_id == order_id).first()
+            return session.query(Shipment).options(joinedload(Shipment.tracks)).filter(Shipment.order_id == order_id).first()
     
     def get_shipment_by_tracking(self, tracking_no: str) -> Optional[Shipment]:
         """根据运单号获取物流信息"""
+        from sqlalchemy.orm import joinedload
         with self.db.get_session() as session:
-            return session.query(Shipment).filter(Shipment.tracking_no == tracking_no).first()
+            return session.query(Shipment).options(joinedload(Shipment.tracks)).filter(Shipment.tracking_no == tracking_no).first()
 
 
 # ============ 主服务入口 ============

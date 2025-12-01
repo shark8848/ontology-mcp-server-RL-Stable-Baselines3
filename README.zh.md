@@ -1144,9 +1144,17 @@ SQLite 数据库 (`data/ecommerce.db`) 包含 12 张表：
 
 
 
-## � 版本迭代历史
+## 🏷️ 版本迭代历史
 
-### v1.5.1 (2025-11-23) - 当前版本 ✨
+### v1.5.3 (2025-12-01) - 当前版本 ✅
+
+**核心亮点**:
+- 🧾 **确认链路持久化**：`confirmation_mode` 中执行的高风险工具（创建订单、处理支付等）会把参数与返回结果写回 `tool_log`、记忆与对话状态，下一轮可直接进入支付/售后，彻底杜绝“下单→再下单”死循环。
+- 🛡️ **SHACL 校验硬性化**：`ontology_validate_order` 被标记为 `CRITICAL_TOOLS`，系统提示语升级为强制要求；未校验前不允许输出最终答复，确认订单后会自动提示“如需继续支付请直接回复确认支付”。
+- 🔍 **工具输出零截断**：流式事件附带完整 JSON Observation，Gradio UI 移除截断逻辑，便于审计每一次工具调用的真实 payload。
+- 📘 **经验文章上线**：新增《[记忆驱动的意图识别与推理闭环：经验与教训](docs/articles/12-memory-intent-lessons.md)》，总结记忆系统在实战中的收益与踩坑，支持中英文目录。
+
+### v1.5.1 (2025-11-23)
 
 **核心亮点**:
 - ✅ 聊天窗口原生图表：Plotly 图以 Markdown + Base64 PNG 形式嵌入对话流，附带意图/用户上下文 metadata 及 `_filter_charts_by_intent()` 审查
@@ -1335,6 +1343,26 @@ Agent引导: 通用说明 → 场景化指导 (正确率+60%)
 ---
 
 ## 📝 更新日志
+
+### 2025-12-01
+
+**🧾 确认链路持久化**
+- `react_agent.py` 与 `conversation_state.py` 将确认态工具（下单、支付、售后）完整上下文写入 `tool_log`、Chroma 记忆与对话状态缓存，再次进入会话时可直接承接付款/售后，无需重新收集参数。
+- `gradio_ui.py` 的确认流程 UI 追加高亮提示，明确下一步建议操作，避免用户误触重复下单。
+
+**🛡️ SHACL 校验强制执行**
+- `ontology_service.py` 将 `ontology_validate_order` 注册为 `CRITICAL_TOOLS`，提示词模板在确认订单阶段会硬性要求调用 SHACL 校验，通过前不会输出最终答复。
+- `tools.py` 统一为关键工具附加“校验未通过即终止对话”的系统信息，LLM 需明确告知用户修复方式。
+
+**🔍 工具输出零截断**
+- `gradio_ui.py` 与 `quality_metrics.py` 取消 Observation 省略逻辑，保留全量 JSON（含敏感字段会通过 `_scrub_payload` 做脱敏），方便审计工具链。
+- 流式事件 payload 也带上完整 `tool_call_id`、`args` 与 `result`，配合 `docs/EXECUTION_LOG_GUIDE.md` 的“永不截断”章节定位异常。
+
+**📘 经验分享文章**
+- 新增《[记忆驱动的意图识别与推理闭环：经验与教训](docs/articles/12-memory-intent-lessons.md)》，记录记忆系统落地的成功案例与踩坑，README 中英文版“路线图/参考”均已加入链接。
+
+**📦 版本**
+- 以标签 **v1.5.3** 发布，建议 `git checkout v1.5.3` 直接体验上述改动。
 
 ### 2025-11-30
 
@@ -1654,6 +1682,7 @@ git clone https://github.com/shark8848/ontology-mcp-server-RL-Stable-Baselines3.
 
 | 版本 | 日期 | 亮点 | 获取方式 |
 |------|------|------|-----------|
+| **v1.5.3** | 2025-12-01 | 确认链路持久化、SHACL 强校验、工具输出零截断、记忆经验文章 | `git checkout v1.5.3` |
 | **v1.5.2** | 2025-11-29 | 真流式链路、意图/检索升级、日志驱动时序图 + 基线标签 | `git checkout v1.5.2` |
 | **v1.5.1** | 2025-11-23 | 图表流式渲染、Analytics MCP 工具、训练控制台优化 | `git checkout v1.5.1` |
 | **v1.5.0** | 2025-11-20 | RL 闭环、Docker/Compose、五页 Gradio UI | `git checkout v1.5.0` |

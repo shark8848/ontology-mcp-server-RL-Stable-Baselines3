@@ -739,6 +739,12 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 
 ## 🏷️ Release Highlights
 
+### v1.5.3 (2025-12-01) — Confirmation Memory & Full Tool Traces
+- **Confirmation-mode persistence**: once users approve a critical tool (create order/payment), the run now writes sanitized arguments + observations back into `tool_log`, memory, and conversation state so the next turn sees the finished order and avoids looping back into checkout.
+- **Validation guard hard stop**: `ontology_validate_order` is marked as a critical tool, the reminder copy blocks final answers until SHACL validation runs, and the agent now prompts the user to continue with payment right after order confirmation.
+- **End-to-end tool transparency**: streaming events ship the entire observation payload and the Gradio UI no longer truncates JSON, making audits and debugging far easier.
+- **New field report**: added [`docs/articles/12-memory-intent-lessons.md`](docs/articles/12-memory-intent-lessons.md) to document the memory-related lessons learned (in English & Chinese index) so future contributors can avoid regressions.
+
 ### v1.5.2 (2025-11-29) — Streaming Trace Baseline ✅
 - **True streaming pipeline**: `react_agent.py` now exposes generator-based `run_stream`, DeepSeek adapter emits token deltas, and the Gradio UI renders thoughts + final answers token-by-token (commits 505b39e → 7c99e84 → aab0956).
 - **Search accuracy upgrades**: configurable multi-strategy intent tracker, LLM-powered query rewriter, FTS5 full-text index + hybrid fallback (FTS5 → LIKE → category) dramatically improve generic queries such as "electronic products".
@@ -782,12 +788,19 @@ SQLite DB `data/ecommerce.db` contains 12 tables:
 
 | Version | Date | Highlights | Download |
 |---------|------|------------|-----------|
+| **v1.5.3** | 2025-12-01 | Confirmation-mode persistence, validation guard hard stop, full tool payload streaming, new memory lessons article | `git checkout v1.5.3` |
 | **v1.5.2** | 2025-11-29 | Streaming generator pipeline, intent/query/search upgrades, log-driven diagrams + baseline tag | `git checkout v1.5.2` |
 | **v1.5.1** | 2025-11-23 | Inline chart streaming, analytics MCP tool, dashboard UX upgrades | `git checkout v1.5.1` |
 | **v1.5.0** | 2025-11-20 | RL closed loop, Docker/Compose packaging, 5-tab Gradio UI | `git checkout v1.5.0` |
 | **v1.0.0** | 2025-10 | Phase 1-3 baseline (ontology + tools + agent) | `git checkout v1.0.0` |
 
 ## 📝 Changelog
+
+### 2025-12-01
+- **Confirmation loop persistence**: the confirmation branch now pushes every executed tool (args + observations) back into `tool_log`, memory, and `ConversationState`, so follow-up turns immediately see the finished order instead of re-running checkout.
+- **Mandatory SHACL validation**: `ontology_validate_order` joins the `CRITICAL_TOOLS` list and the reminder copy blocks final replies until validation completes; after an order is confirmed the agent proactively asks whether to continue with payment.
+- **Full tool outputs in chat**: streaming events now include the complete JSON observation and the Gradio UI no longer truncates long payloads, making audits and debugging straightforward.
+- **New lessons-learned doc**: published `docs/articles/12-memory-intent-lessons.md` to capture the practical dos/don’ts of using memory for intent detection and reasoning.
 
 ### 2025-11-30
 - **Ontology-first推理覆盖**：`ecommerce_ontology.py` 现对折扣、物流、退货、取消四大流程优先加载 `ontology_rules.ttl`，命中规则时返回 `rule_applied`，无匹配才退回静态策略；对应 `tests/test_commerce_service.py`、`tests/test_services.py` 已通过全量 pytest。

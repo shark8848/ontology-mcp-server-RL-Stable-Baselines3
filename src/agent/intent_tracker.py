@@ -27,9 +27,32 @@ from datetime import datetime
 import re
 import json
 import logging
+import os
+from urllib.parse import urlparse
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _is_truthy(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_local_endpoint(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "host.docker.internal",
+        "ollama",
+    }
 
 
 class IntentCategory(Enum):
@@ -420,40 +443,86 @@ class EmbeddingIntentRecognizer(BaseIntentRecognizer):
         self.config = config or {}
         self.similarity_threshold = self.config.get("similarity_threshold", 0.75)
         self.model_name = self.config.get("model", "paraphrase-multilingual-MiniLM-L12-v2")
+        self.provider = str(self.config.get("provider", "sentence_transformers")).strip().lower()
+        self.api_url = self.config.get("api_url")
+        self.api_key = self.config.get("api_key")
         self.enable_cache = self.config.get("enable_template_cache", True)
         
         self.model = None
+        self.client = None
         self.template_embeddings = None
         
         # 延迟加载模型
         self._init_model()
+
+    def _encode_texts(self, texts: List[str]):
+        """统一文本向量编码接口"""
+        if self.provider in {"ollama", "openai", "openai_compatible"}:
+            if self.client is None:
+                raise RuntimeError("Embedding API client 未初始化")
+            response = self.client.embeddings.create(model=self.model_name, input=texts)
+            return [item.embedding for item in response.data]
+        if self.model is None:
+            raise RuntimeError("SentenceTransformer 模型未初始化")
+        return self.model.encode(texts)
     
     def _init_model(self):
         """初始化 embedding 模型"""
         try:
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(self.model_name)
+            force_local_only = _is_truthy(os.getenv("FORCE_LOCAL_ONLY"))
+            if self.provider in {"ollama", "openai", "openai_compatible"}:
+                from openai import OpenAI
+
+                base_url = self.api_url or "http://localhost:11434/v1"
+                api_key = self.api_key or "ollama"
+                if force_local_only and not _is_local_endpoint(base_url):
+                    raise RuntimeError(
+                        f"FORCE_LOCAL_ONLY=1 时仅允许本地 embedding 端点，当前 api_url={base_url}"
+                    )
+                self.client = OpenAI(base_url=base_url, api_key=api_key)
+                self.model = self.model_name
+                logger.info("Embedding API 客户端加载成功: provider=%s model=%s base=%s", self.provider, self.model_name, base_url)
+            else:
+                from sentence_transformers import SentenceTransformer
+
+                def _load_local_compatible(model_name: str):
+                    try:
+                        return SentenceTransformer(model_name, local_files_only=True)
+                    except TypeError:
+                        return SentenceTransformer(model_name)
+
+                if force_local_only:
+                    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+                    self.model = _load_local_compatible(self.model_name)
+                else:
+                    try:
+                        self.model = _load_local_compatible(self.model_name)
+                        logger.info("Embedding 模型命中本地缓存: %s", self.model_name)
+                    except Exception:
+                        self.model = SentenceTransformer(self.model_name)
+                logger.info(f"Embedding 模型加载成功: {self.model_name}")
             
             # 预计算模板 embeddings
             if self.enable_cache:
                 self.template_embeddings = {}
                 for intent, templates in self.INTENT_TEMPLATES.items():
-                    self.template_embeddings[intent] = self.model.encode(templates)
-            
-            logger.info(f"Embedding 模型加载成功: {self.model_name}")
+                    self.template_embeddings[intent] = self._encode_texts(templates)
         except ImportError:
-            logger.warning("sentence-transformers 未安装，Embedding 识别器不可用")
+            logger.warning("Embedding 依赖未安装，Embedding 识别器不可用")
             self.model = None
+            self.client = None
         except Exception as e:
             logger.error(f"Embedding 模型加载失败: {e}")
             self.model = None
+            self.client = None
     
     def get_confidence(self) -> float:
         return 0.75  # Embedding 识别器中等置信度
     
     def recognize(self, user_input: str, turn_id: int = 0) -> List[Intent]:
         """使用 Embedding 相似度识别意图"""
-        if self.model is None:
+        if self.model is None and self.client is None:
             logger.warning("Embedding 模型未加载，跳过识别")
             return [Intent(
                 category=IntentCategory.UNKNOWN,
@@ -467,7 +536,7 @@ class EmbeddingIntentRecognizer(BaseIntentRecognizer):
             import numpy as np
             
             # 计算输入的 embedding
-            input_emb = self.model.encode([user_input])[0]
+            input_emb = self._encode_texts([user_input])[0]
             
             best_intent = IntentCategory.UNKNOWN
             best_score = 0.0

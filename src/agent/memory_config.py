@@ -27,6 +27,9 @@ class ChromaDBConfig:
     persist_directory: str = "data/chroma_memory"
     collection_name: str = "conversation_memory"
     embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_provider: str = "default"  # default | ollama | openai_compatible
+    embedding_api_url: Optional[str] = None
+    embedding_api_key: Optional[str] = None
 
 
 @dataclass

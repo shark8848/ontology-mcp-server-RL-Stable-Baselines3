@@ -19,6 +19,26 @@ docker-compose logs -f agent-ui
 docker-compose down
 ```
 
+## 离线部署：构建时预置 Embedding 模型
+
+如运行环境无法访问 HuggingFace，可在镜像构建阶段预下载 `sentence-transformers` 模型：
+
+```bash
+docker build -t ontology-mcp-server:local \
+  --build-arg PRELOAD_ST_MODELS="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,sentence-transformers/all-MiniLM-L6-v2" \
+  .
+```
+
+构建完成后，运行时会直接使用镜像内缓存，避免首次在线下载。
+
+注意：
+- 该预置方式适用于 `sentence-transformers` 路径。
+- 若使用 `Ollama` embedding（如 `nomic-embed-text`），模型在 Ollama 服务侧管理，需要在 Ollama 主机执行：
+
+```bash
+ollama pull nomic-embed-text
+```
+
 ## 服务管理
 
 ```bash

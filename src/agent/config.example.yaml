@@ -45,7 +45,12 @@ memory:
     # Collection 名称
     collection_name: "conversation_memory"
     # 嵌入模型名称 (all-MiniLM-L6-v2 是轻量级且效果好的模型)
-    embedding_model: "all-MiniLM-L6-v2"
+    embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+    # embedding 提供方: default | ollama | openai_compatible
+    embedding_provider: "default"
+    # embedding_provider=ollama/openai_compatible 时可配置
+    # embedding_api_url: "http://localhost:11434/v1"
+    # embedding_api_key: "ollama"
   
   # 记忆使用策略
   strategy:

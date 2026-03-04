@@ -5,6 +5,13 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 cd "${REPO_ROOT}"
 
+# 兜底设置 PYTHONPATH，确保 python3 -m agent.gradio_ui 可被解析
+if [[ -n "${PYTHONPATH:-}" ]]; then
+	export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH}"
+else
+	export PYTHONPATH="${REPO_ROOT}/src"
+fi
+
 : "${LOG_DIR:=${REPO_ROOT}/logs}"
 mkdir -p "${LOG_DIR}"
 PROCESS_REGISTRY="${LOG_DIR}/processes.pid"

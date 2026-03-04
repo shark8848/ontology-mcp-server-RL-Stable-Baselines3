@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -110,6 +111,27 @@ def _coerce_int(value: Optional[Any]) -> Optional[int]:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _is_truthy(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_local_endpoint(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "host.docker.internal",
+        "ollama",
+    }
 
 
 class DeepseekChatModel:
@@ -393,6 +415,17 @@ def build_chat_model(
     resolved_model = resolved_model or (
         DEFAULT_OLLAMA_MODEL if is_ollama else DEFAULT_MODEL
     )
+
+    force_local_only = _is_truthy(os.getenv("FORCE_LOCAL_ONLY"))
+    if force_local_only:
+        if not is_ollama:
+            raise RuntimeError(
+                "FORCE_LOCAL_ONLY=1 时仅允许本地 Ollama 提供方，请将 LLM_PROVIDER 设置为 ollama"
+            )
+        if not _is_local_endpoint(resolved_api_url):
+            raise RuntimeError(
+                f"FORCE_LOCAL_ONLY=1 时仅允许本地端点，当前 OLLAMA_API_URL={resolved_api_url}"
+            )
 
     resolved_temperature = (
         temperature

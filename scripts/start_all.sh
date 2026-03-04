@@ -5,6 +5,13 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 cd "${REPO_ROOT}"
 
+# 兜底设置 PYTHONPATH，确保可直接通过 python -m agent.* 运行
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH}"
+else
+  export PYTHONPATH="${REPO_ROOT}/src"
+fi
+
 VENV_DIR=${VENV_DIR:-"${REPO_ROOT}/.venv"}
 if [[ -z "${VIRTUAL_ENV:-}" && -d "${VENV_DIR}" && -x "${VENV_DIR}/bin/activate" ]]; then
   echo "Detected virtual environment at ${VENV_DIR}. Activating automatically..."
@@ -50,3 +57,24 @@ for service in "${SERVICES[@]}"; do
 done
 
 echo "All services launched. PID registry: ${PROCESS_REGISTRY}"
+
+# 当该脚本作为容器 PID1 运行时，避免脚本退出导致容器停止。
+if [[ -f "/.dockerenv" ]]; then
+  echo "Detected Docker runtime; entering service monitor loop..."
+  while true; do
+    alive=0
+    while read -r name pid; do
+      [[ -z "${pid:-}" ]] && continue
+      if kill -0 "${pid}" 2>/dev/null; then
+        alive=1
+        break
+      fi
+    done < "${PROCESS_REGISTRY}"
+
+    if [[ "${alive}" -eq 0 ]]; then
+      echo "No managed service process is alive. Exiting."
+      exit 1
+    fi
+    sleep 5
+  done
+fi

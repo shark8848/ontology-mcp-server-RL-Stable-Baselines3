@@ -20,6 +20,7 @@ import os
 import json
 import re
 import shutil
+from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -37,6 +38,41 @@ from agent.memory_config import get_memory_config
 from agent.user_context_extractor import UserContextManager
 
 LOGGER = get_logger(__name__)
+
+
+def _is_truthy(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_local_endpoint(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "host.docker.internal",
+        "ollama",
+    }
+
+
+class OpenAICompatibleEmbeddingFunction:
+    """OpenAI 兼容 Embedding Function（可用于 Ollama /v1/embeddings）"""
+
+    def __init__(self, model_name: str, api_url: str, api_key: str):
+        from openai import OpenAI
+
+        self.model_name = model_name
+        self.client = OpenAI(base_url=api_url, api_key=api_key)
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        response = self.client.embeddings.create(model=self.model_name, input=input)
+        return [item.embedding for item in response.data]
 
 
 @dataclass
@@ -135,6 +171,8 @@ class ChromaConversationMemory:
                 allow_reset=True,
             )
         )
+
+        self.embedding_function = self._build_embedding_function(config)
         
         # 获取或创建 collection（兼容新版本的 metadata 限制）
         self.collection = self._create_collection_with_retry()
@@ -158,7 +196,8 @@ class ChromaConversationMemory:
         try:
             return self.client.get_or_create_collection(
                 name=self.collection_name,
-                metadata={"description": "Conversation memory storage"}
+                metadata={"description": "Conversation memory storage"},
+                embedding_function=self.embedding_function,
             )
         except Exception as exc:
             if self._is_reserved_metadata_error(exc):
@@ -168,10 +207,51 @@ class ChromaConversationMemory:
                 self._backup_and_reset_store()
                 return self.client.get_or_create_collection(
                     name=self.collection_name,
-                    metadata={"description": "Conversation memory storage"}
+                    metadata={"description": "Conversation memory storage"},
+                    embedding_function=self.embedding_function,
                 )
             LOGGER.error("Failed to create Chroma collection: %s", exc)
             raise
+
+    def _build_embedding_function(self, config):
+        """根据配置构建 embedding function；默认使用 Chroma 内置。"""
+        provider = str(getattr(config.chromadb, "embedding_provider", "default") or "default").strip().lower()
+        force_local_only = _is_truthy(os.getenv("FORCE_LOCAL_ONLY"))
+        if provider in {"", "default", "chroma_default", "sentence_transformers"}:
+            return None
+
+        if provider in {"ollama", "openai", "openai_compatible"}:
+            api_url = (
+                getattr(config.chromadb, "embedding_api_url", None)
+                or os.getenv("OLLAMA_API_URL")
+                or os.getenv("OPENAI_API_URL")
+                or "http://localhost:11434/v1"
+            )
+            api_key = (
+                getattr(config.chromadb, "embedding_api_key", None)
+                or os.getenv("OLLAMA_API_KEY")
+                or os.getenv("OPENAI_API_KEY")
+                or "ollama"
+            )
+            if force_local_only and not _is_local_endpoint(api_url):
+                raise RuntimeError(
+                    f"FORCE_LOCAL_ONLY=1 时仅允许本地 embedding 端点，当前 embedding_api_url={api_url}"
+                )
+            model_name = getattr(config.chromadb, "embedding_model", "nomic-embed-text")
+            LOGGER.info(
+                "Chroma embedding provider: %s, model=%s, base=%s",
+                provider,
+                model_name,
+                api_url,
+            )
+            return OpenAICompatibleEmbeddingFunction(
+                model_name=model_name,
+                api_url=api_url,
+                api_key=api_key,
+            )
+
+        LOGGER.warning("未知 embedding_provider=%s，回退 Chroma 默认 embedding", provider)
+        return None
 
     @staticmethod
     def _is_reserved_metadata_error(error: Exception) -> bool:

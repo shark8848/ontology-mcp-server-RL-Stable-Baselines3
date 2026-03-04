@@ -3,7 +3,10 @@ version: '3.8'
 services:
   # MCP Server - 本体推理与电商业务服务
   mcp-server:
-    build: .
+    build:
+      context: .
+      args:
+        PRELOAD_ST_MODELS: ${PRELOAD_ST_MODELS:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,sentence-transformers/all-MiniLM-L6-v2}
     container_name: ontology-mcp-server
     ports:
       - "8000:8000"
@@ -12,6 +15,7 @@ services:
       - ./config:/app/config
     environment:
       - ONTOLOGY_DATA_DIR=/app/data
+      - FORCE_LOCAL_ONLY=${FORCE_LOCAL_ONLY:-0}
     command: uvicorn ontology_mcp_server.server:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -25,7 +29,10 @@ services:
 
   # Agent UI - Gradio 对话界面
   agent-ui:
-    build: .
+    build:
+      context: .
+      args:
+        PRELOAD_ST_MODELS: ${PRELOAD_ST_MODELS:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,sentence-transformers/all-MiniLM-L6-v2}
     container_name: ontology-agent-ui
     ports:
       - "7860:7860"
@@ -40,6 +47,10 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-deepseek-chat}
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - OLLAMA_API_URL=${OLLAMA_API_URL:-http://host.docker.internal:11434/v1}
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY:-ollama}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+      - FORCE_LOCAL_ONLY=${FORCE_LOCAL_ONLY:-0}
     command: python -m agent.gradio_ui
     depends_on:
       mcp-server:
@@ -50,7 +61,10 @@ services:
 
   # Training Dashboard - RL 训练控制台
   training-dashboard:
-    build: .
+    build:
+      context: .
+      args:
+        PRELOAD_ST_MODELS: ${PRELOAD_ST_MODELS:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,sentence-transformers/all-MiniLM-L6-v2}
     container_name: ontology-training-dashboard
     ports:
       - "7861:7861"
@@ -61,6 +75,7 @@ services:
     environment:
       - ONTOLOGY_DATA_DIR=/app/data
       - PYTHONPATH=/app/src
+      - FORCE_LOCAL_ONLY=${FORCE_LOCAL_ONLY:-0}
     command: python scripts/run_training_dashboard.py
     depends_on:
       - mcp-server

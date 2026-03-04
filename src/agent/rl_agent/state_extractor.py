@@ -14,6 +14,7 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import json
+import os
 
 
 @dataclass
@@ -91,7 +92,23 @@ class StateExtractor:
         if use_text_embedding:
             try:
                 from sentence_transformers import SentenceTransformer
-                self.text_encoder = SentenceTransformer('all-MiniLM-L6-v2')
+
+                def _load_local_compatible(model_name: str):
+                    try:
+                        return SentenceTransformer(model_name, local_files_only=True)
+                    except TypeError:
+                        return SentenceTransformer(model_name)
+
+                force_local_only = str(os.getenv("FORCE_LOCAL_ONLY", "")).strip().lower() in {"1", "true", "yes", "on"}
+                if force_local_only:
+                    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+                    self.text_encoder = _load_local_compatible('all-MiniLM-L6-v2')
+                else:
+                    try:
+                        self.text_encoder = _load_local_compatible('all-MiniLM-L6-v2')
+                    except Exception:
+                        self.text_encoder = SentenceTransformer('all-MiniLM-L6-v2')
             except ImportError:
                 print("Warning: sentence-transformers not installed, using simple encoding")
                 self.use_text_embedding = False

@@ -44,10 +44,10 @@ memory:
     persist_directory: "data/chroma_memory"
     # Collection 名称
     collection_name: "conversation_memory"
-    # 嵌入模型名称 (all-MiniLM-L6-v2 是轻量级且效果好的模型)
-    embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-    # embedding 提供方: default | ollama | openai_compatible
-    embedding_provider: "default"
+    # 嵌入模型名称（默认使用本地 sentence-transformers）
+    embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # embedding 提供方: sentence_transformers | ollama | openai_compatible
+    embedding_provider: "sentence_transformers"
     # embedding_provider=ollama/openai_compatible 时可配置
     # embedding_api_url: "http://localhost:11434/v1"
     # embedding_api_key: "ollama"

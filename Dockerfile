@@ -31,7 +31,7 @@ RUN python -m pip install --no-cache-dir --timeout ${PIP_DEFAULT_TIMEOUT} --retr
 FROM python:3.12-slim
 
 ARG COMMON_OS_TOOLS="curl wget less vim-tiny jq unzip iputils-ping netcat-openbsd procps net-tools"
-ARG PRELOAD_ST_MODELS=""
+ARG PRELOAD_ST_MODELS="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,sentence-transformers/all-MiniLM-L6-v2"
 
 WORKDIR /app
 

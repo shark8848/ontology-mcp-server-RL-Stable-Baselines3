@@ -22,6 +22,8 @@ import html
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+
 import gradio as gr
 import yaml
 import plotly.graph_objects as go

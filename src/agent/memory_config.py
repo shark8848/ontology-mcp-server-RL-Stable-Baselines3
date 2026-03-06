@@ -26,8 +26,8 @@ class ChromaDBConfig:
     """ChromaDB 配置"""
     persist_directory: str = "data/chroma_memory"
     collection_name: str = "conversation_memory"
-    embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_provider: str = "default"  # default | ollama | openai_compatible
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_provider: str = "sentence_transformers"  # sentence_transformers | ollama | openai_compatible
     embedding_api_url: Optional[str] = None
     embedding_api_key: Optional[str] = None
 

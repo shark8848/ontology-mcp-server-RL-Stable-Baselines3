@@ -3,25 +3,43 @@
 ## 构建与启动
 
 ```bash
-# 构建镜像
-docker-compose build
+# 构建并加载本地镜像（推荐）
+./scripts/build.sh --single-image --load-local
 
-# 启动所有服务（后台）
-docker-compose up -d
+# 使用宿主机启动脚本（默认走 host 网络，并挂载 src/agent/config.yaml）
+./scripts/start_docker.sh
+
+# 仅拉起容器（不启动任何服务，便于 docker exec 进入后手动执行）
+docker run -d --name ontology-mcp-server \
+  -p 8001:8000 -p 7860:7860 -p 7861:7861 -p 6006:6006 \
+  -e ONTOLOGY_DATA_DIR=/app/data \
+  -e OPENAI_API_URL='https://aicp.teamshub.com/ai-paas/ai-open/sitech/aiopen/stream/Qwen3-235B-A22B-Public/v1' \
+  -e OPENAI_API_KEY='${OPENAI_API_KEY}' \
+  -e OPENAI_MODEL=Qwen3-235B-A22B-Public \
+  -e LLM_PROVIDER=deepseek \
+  -e HF_HUB_OFFLINE=1 \
+  -e TRANSFORMERS_OFFLINE=1 \
+  --entrypoint tail \
+  ontology-mcp-server:local -f /dev/null
+
+# 进入容器
+docker exec -it ontology-mcp-server bash
 
 # 查看日志
-docker-compose logs -f
+docker logs -f ontology-mcp-server
 
-# 查看特定服务日志
-docker-compose logs -f agent-ui
-
-# 停止服务
-docker-compose down
+# 停止并删除容器
+docker rm -f ontology-mcp-server
 ```
 
 ## 离线部署：构建时预置 Embedding 模型
 
-如运行环境无法访问 HuggingFace，可在镜像构建阶段预下载 `sentence-transformers` 模型：
+当前 `Dockerfile` 已默认预下载本地 embedding 模型（用于记忆模块与意图识别），默认模型列表：
+
+- `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- `sentence-transformers/all-MiniLM-L6-v2`
+
+如需自定义模型列表，可在镜像构建阶段覆盖 `PRELOAD_ST_MODELS`：
 
 ```bash
 docker build -t ontology-mcp-server:local \
@@ -82,6 +100,20 @@ docker run --rm -v ontology-rl-commerce-agent_data:/data -v $(pwd):/backup \
 # 清理未使用的卷
 docker volume prune
 ```
+
+## 日志轮转（推荐）
+
+容器日志默认输出到宿主机 `data/logs`，可用以下脚本配置系统 `logrotate`：
+
+```bash
+# 预览将要安装的规则
+./scripts/setup_logrotate.sh
+
+# 安装到 /etc/logrotate.d/ontology-mcp-server
+./scripts/setup_logrotate.sh --install
+```
+
+默认策略：按天轮转、保留 14 份、压缩历史日志、空文件跳过。
 
 ## 完全重建
 

@@ -2096,20 +2096,24 @@ class LangChainAgent:
                 "response_length": len(final_answer),
                 "tool_calls_count": len(tool_log)
             })
-            
-            self.memory.add_turn(
-                user_input=user_input,
-                agent_response=final_answer,
-                tool_calls=tool_log,
-            )
-            if hasattr(self.memory, '_cache'):
-                # ChromaDB 记忆
-                logger.info("本轮对话已保存到 ChromaDB (总计 %d 轮)", len(self.memory._cache))
-                add_log("memory_saved", f"ChromaDB: 总计 {len(self.memory._cache)} 轮", {})
-            elif hasattr(self.memory, 'history'):
-                # 基础记忆
-                logger.info("本轮对话已保存到记忆 (总计 %d 轮)", len(self.memory.history))
-                add_log("memory_saved", f"基础记忆: 总计 {len(self.memory.history)} 轮", {})
+
+            try:
+                self.memory.add_turn(
+                    user_input=user_input,
+                    agent_response=final_answer,
+                    tool_calls=tool_log,
+                )
+                if hasattr(self.memory, '_cache'):
+                    # ChromaDB 记忆
+                    logger.info("本轮对话已保存到 ChromaDB (总计 %d 轮)", len(self.memory._cache))
+                    add_log("memory_saved", f"ChromaDB: 总计 {len(self.memory._cache)} 轮", {})
+                elif hasattr(self.memory, 'history'):
+                    # 基础记忆
+                    logger.info("本轮对话已保存到记忆 (总计 %d 轮)", len(self.memory.history))
+                    add_log("memory_saved", f"基础记忆: 总计 {len(self.memory.history)} 轮", {})
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("写入对话记忆失败，继续主流程: %s", exc)
+                add_log("memory_save_failed", str(exc), {})
         
         # Phase 4 优化: 结束质量跟踪
         if self.quality_tracker:

@@ -27,8 +27,13 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-: "${LOG_DIR:=${REPO_ROOT}/logs}"
+: "${ONTOLOGY_DATA_DIR:=${REPO_ROOT}/data}"
+: "${LOG_DIR:=${ONTOLOGY_DATA_DIR}/logs}"
+: "${AGENT_LOG_DIR:=${LOG_DIR}/agent}"
+: "${ONTOLOGY_SERVER_LOG_DIR:=${LOG_DIR}/server}"
+export ONTOLOGY_DATA_DIR LOG_DIR AGENT_LOG_DIR ONTOLOGY_SERVER_LOG_DIR
 mkdir -p "${LOG_DIR}"
+mkdir -p "${AGENT_LOG_DIR}" "${ONTOLOGY_SERVER_LOG_DIR}"
 PROCESS_REGISTRY="${LOG_DIR}/processes.pid"
 rm -f "${PROCESS_REGISTRY}"
 touch "${PROCESS_REGISTRY}"
@@ -38,6 +43,13 @@ if [[ -z "${DISABLE_SCRIPT_LOG_FILES:-}" ]]; then
   export DISABLE_SCRIPT_LOG_FILES=1
 else
   export DISABLE_SCRIPT_LOG_FILES
+fi
+
+# 默认关闭 Gradio 遥测，避免 analytics 线程在部分依赖组合下抛异常
+if [[ -z "${GRADIO_ANALYTICS_ENABLED:-}" ]]; then
+  export GRADIO_ANALYTICS_ENABLED=False
+else
+  export GRADIO_ANALYTICS_ENABLED
 fi
 
 declare -a SERVICES=(

@@ -20,6 +20,8 @@ import os
 import json
 import re
 import shutil
+import hashlib
+import math
 from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field, asdict
@@ -73,6 +75,72 @@ class OpenAICompatibleEmbeddingFunction:
     def __call__(self, input: List[str]) -> List[List[float]]:
         response = self.client.embeddings.create(model=self.model_name, input=input)
         return [item.embedding for item in response.data]
+
+
+class LocalHashEmbeddingFunction:
+    """轻量本地 embedding：无外部依赖，保证 Chroma add/query 可用。"""
+
+    def __init__(self, dimensions: int = 256):
+        self.dimensions = max(32, int(dimensions))
+
+    def _embed_one(self, text: str) -> List[float]:
+        vector = [0.0] * self.dimensions
+        normalized_text = (text or "").strip().lower()
+        if not normalized_text:
+            return vector
+
+        for token in normalized_text.split():
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = int.from_bytes(digest[:4], "big") % self.dimensions
+            sign = 1.0 if (digest[4] & 1) == 0 else -1.0
+            weight = 1.0 + (digest[5] / 255.0)
+            vector[index] += sign * weight
+
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm > 0:
+            vector = [value / norm for value in vector]
+        return vector
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        return [self._embed_one(text) for text in input]
+
+
+class LocalSentenceTransformerEmbeddingFunction:
+    """本地 Sentence-Transformers embedding，优先使用本地缓存。"""
+
+    def __init__(self, model_name: str, force_local_only: bool = False):
+        self.model_name = model_name
+        self.force_local_only = force_local_only
+        self.model = None
+        self._init_model()
+
+    def _init_model(self) -> None:
+        from sentence_transformers import SentenceTransformer
+
+        def _load_local_compatible(name: str):
+            try:
+                return SentenceTransformer(name, local_files_only=True)
+            except TypeError:
+                return SentenceTransformer(name)
+
+        if self.force_local_only:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            self.model = _load_local_compatible(self.model_name)
+            return
+
+        try:
+            self.model = _load_local_compatible(self.model_name)
+            LOGGER.info("记忆 Embedding 模型命中本地缓存: %s", self.model_name)
+        except Exception:
+            self.model = SentenceTransformer(self.model_name)
+            LOGGER.info("记忆 Embedding 模型在线加载成功: %s", self.model_name)
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        if self.model is None:
+            raise RuntimeError("SentenceTransformer 模型未初始化")
+        embeddings = self.model.encode(input)
+        return embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
 
 
 @dataclass
@@ -214,11 +282,33 @@ class ChromaConversationMemory:
             raise
 
     def _build_embedding_function(self, config):
-        """根据配置构建 embedding function；默认使用 Chroma 内置。"""
-        provider = str(getattr(config.chromadb, "embedding_provider", "default") or "default").strip().lower()
+        """根据配置构建 embedding function；默认优先使用本地 sentence-transformers。"""
+        provider = str(
+            getattr(config.chromadb, "embedding_provider", "sentence_transformers")
+            or "sentence_transformers"
+        ).strip().lower()
         force_local_only = _is_truthy(os.getenv("FORCE_LOCAL_ONLY"))
-        if provider in {"", "default", "chroma_default", "sentence_transformers"}:
-            return None
+        if provider in {"", "default", "chroma_default", "sentence_transformers", "local", "local_st"}:
+            model_name = getattr(
+                config.chromadb,
+                "embedding_model",
+                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            )
+            try:
+                LOGGER.info(
+                    "Chroma embedding provider: sentence_transformers, model=%s",
+                    model_name,
+                )
+                return LocalSentenceTransformerEmbeddingFunction(
+                    model_name=model_name,
+                    force_local_only=force_local_only,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "本地 sentence-transformers 初始化失败，回退 lightweight hash embedding: %s",
+                    exc,
+                )
+                return LocalHashEmbeddingFunction()
 
         if provider in {"ollama", "openai", "openai_compatible"}:
             api_url = (
@@ -250,8 +340,8 @@ class ChromaConversationMemory:
                 api_key=api_key,
             )
 
-        LOGGER.warning("未知 embedding_provider=%s，回退 Chroma 默认 embedding", provider)
-        return None
+        LOGGER.warning("未知 embedding_provider=%s，回退本地轻量 embedding", provider)
+        return LocalHashEmbeddingFunction()
 
     @staticmethod
     def _is_reserved_metadata_error(error: Exception) -> bool:
@@ -475,8 +565,14 @@ Agent: {turn.agent_response}
             )
             LOGGER.info("新增对话记录: turn_id=%s", turn_id)
         except Exception as e:
-            LOGGER.error("存储对话记录失败: %s", e)
-            raise
+            error_message = str(e)
+            LOGGER.error("存储对话记录失败: %s", error_message)
+            if "APIConnectionError.__init__() takes 1 positional argument but 2 were given" in error_message:
+                LOGGER.warning(
+                    "检测到 Chroma 重包 OpenAI 连接异常兼容问题，已降级为非阻塞错误，主流程继续"
+                )
+            turn.metadata["memory_persist_failed"] = True
+            turn.metadata["memory_persist_error"] = error_message[:500]
         
         # 更新缓存
         self._cache.append(turn)
